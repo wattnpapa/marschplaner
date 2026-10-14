@@ -881,7 +881,8 @@ async function strassenartenErmitteln({ automatisch = false } = {}) {
     const a = anteileImAbschnitt(arten, 0, km);
     const bekannt = km - a.unbekannt;
     meldung(`Straßenarten erkannt: BAB ${zahl(a.anteile.bab, 0)} km · BuL ${zahl(a.anteile.bul, 0)} km · Ort ${zahl(a.anteile.ort, 0)} km`
-      + (a.unbekannt > km * 0.1 ? ` – für ${zahl(a.unbekannt, 0)} km fand OSM keine Straße nahe der Route (zählt als BuL)` : ''), a.unbekannt > km * 0.1 || bekannt <= 0 ? 'fehler' : '');
+      + (arten.luecken ? ` – ${arten.luecken} Streckenstück(e) konnte(n) nicht abgefragt werden (Server überlastet); „Straßenarten neu ermitteln“ später wiederholen` : '')
+      + (a.unbekannt > km * 0.1 ? ` – für ${zahl(a.unbekannt, 0)} km fand OSM keine Straße nahe der Route (zählt als BuL)` : ''), a.unbekannt > km * 0.1 || bekannt <= 0 || arten.luecken ? 'fehler' : '');
   } catch (err) {
     meldung(`Straßenarten konnten nicht abgefragt werden: ${err.message} – die Abschnitte gelten bis dahin als Bundes-/Landstraße.`, 'fehler');
   } finally {
