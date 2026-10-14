@@ -38,6 +38,15 @@ function blatt(id, ausrichtung, inhalt, p, klasse = '') {
   return `<section class="blatt ${ausrichtung} ${klasse}" data-blatt="${id}">${inhalt}${fuss(p)}</section>`;
 }
 
+/** „BuL“ bzw. bei gemischten Abschnitten „BuL 70 % · Ort 30 %“ */
+function artText(leg) {
+  if (!leg.auto || !leg.gemischt || !(leg.strecke > 0)) return KLASSE_KURZ[leg.klasse];
+  return KLASSEN.map(k => [k, leg.anteile[k.id]])
+    .filter(([, a]) => a / leg.strecke >= 0.05)
+    .sort((x, y) => y[1] - x[1])
+    .map(([k, a]) => `${k.kurz} ${Math.round(a / leg.strecke * 100)} %`).join(' · ');
+}
+
 function leer(text) {
   return `<p class="leerhinweis">${e(text)}</p>`;
 }
@@ -128,7 +137,7 @@ function marschtabelleBlatt(p, kolonne) {
       const l = naechste.leg;
       zeilen += `<tr class="abschnitt">
         <td></td><td></td><td></td>
-        <td class="strasse">${e(naechste.kp.strasse || '')}<small>${KLASSE_KURZ[l.klasse]}</small></td>
+        <td class="strasse">${e(l.strasse || '')}<small>${e(artText(l))}</small></td>
         <td class="zahl">${zahl(l.strecke, 1)}</td><td></td>
         <td class="zahl">${zahl(l.fahrMin, 0)}</td><td></td>
         <td class="zahl">${kolonne ? zahl(l.laengeM, 0) : ''}</td>
@@ -267,7 +276,7 @@ function marschskizze(p) {
       ? abschnittSkizze(track, kmStart, kmStart + Math.min(1.5, fp.kmGesamt || 1.5))
       : abschnittSkizze(track, vorher.km + kmStart, z.km + kmStart));
     const hinw = [];
-    if (z.leg) hinw.push(`${e(z.kp.strasse || '')} (${KLASSE_KURZ[z.leg.klasse]}), ${zahl(z.leg.strecke, 1)} km`);
+    if (z.leg) hinw.push(`${e(z.leg.strasse || '')} (${e(artText(z.leg))}), ${zahl(z.leg.strecke, 1)} km`);
     if (z.kp.typ !== 'kp') hinw.push(`<strong>${e(TYP_NAME[z.kp.typ])}</strong>${z.halt > 0 ? `, ${zahl(z.halt, 0)} min` : ''}`);
     else if (z.halt > 0) hinw.push(`Halt ${zahl(z.halt, 0)} min`);
     if (z.kp.bemerkung) hinw.push(e(z.kp.bemerkung));

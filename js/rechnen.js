@@ -6,6 +6,8 @@
 // km/h für Geschwindigkeiten. Uhrzeiten sind Minuten seit Mitternacht des
 // Marschtages und dürfen über 1440 hinausgehen (Marsch über Mitternacht).
 
+import { anteileImAbschnitt, strasseImAbschnitt } from './strassenart.js';
+
 export const KLASSEN = [
   { id: 'bab', kurz: 'BAB', name: 'Bundesautobahn' },
   { id: 'bul', kurz: 'BuL', name: 'Bundes- und Landstraße' },
@@ -166,19 +168,38 @@ export function fahrplan(projekt, kolonne) {
     let leg = null;
     let t = 0;
     if (i > 0) {
-      const klasse = KLASSE_KURZ[kp.klasse] ? kp.klasse : 'bul';
-      const v = par.v[klasse];
       const strecke = Math.max(0, kp.km - vorigerKm);
-      fahrExakt += wegZeitMin(strecke, v);
-      if (strecke > 0 && !(v > 0)) {
-        hinweise.push(`Keine Marschgeschwindigkeit für ${KLASSE_KURZ[klasse]} – Abschnitt nach „${kp.ort || 'Punkt ' + (i + 1)}“ ohne Zeit.`);
+      const auto = kp.klasse === 'auto' && projekt.route.arten;
+      let klasse, v, fm, anteile = null, strasse = kp.strasse || '';
+      if (auto) {
+        // Straßenart aus OSM: Kilometer je Art im Abschnitt, Zeit anteilig gerechnet
+        const a = anteileImAbschnitt(projekt.route.arten, vorigerKm, kp.km);
+        anteile = a.anteile;
+        klasse = a.dominant;
+        fm = KLASSEN.reduce((sum, c) => sum + wegZeitMin(anteile[c.id], par.v[c.id]), 0);
+        for (const c of KLASSEN) {
+          if (anteile[c.id] > 0 && !(par.v[c.id] > 0)) {
+            hinweise.push(`Keine Marschgeschwindigkeit für ${c.kurz} – Abschnitt nach „${kp.ort || 'Punkt ' + (i + 1)}“ unvollständig.`);
+          }
+        }
+        v = fm > 0 ? strecke / fm * 60 : par.v[klasse];
+        if (!strasse) strasse = strasseImAbschnitt(projekt.route.arten, vorigerKm, kp.km);
+      } else {
+        klasse = KLASSE_KURZ[kp.klasse] ? kp.klasse : 'bul';
+        v = par.v[klasse];
+        fm = wegZeitMin(strecke, v);
+        if (strecke > 0 && !(v > 0)) {
+          hinweise.push(`Keine Marschgeschwindigkeit für ${KLASSE_KURZ[klasse]} – Abschnitt nach „${kp.ort || 'Punkt ' + (i + 1)}“ ohne Zeit.`);
+        }
       }
+      fahrExakt += fm;
       t = Math.max(abfahrt, Math.round(fahrExakt + haltSumme));
-      const fm = t - abfahrt;
-      fahrRund += fm;
+      const fahrt = t - abfahrt;
+      fahrRund += fahrt;
       const laengeM = kolonne ? kolonnenLaenge(par, kolonne, klasse) : 0;
       leg = {
-        klasse, v, strecke, fahrMin: fm,
+        klasse, v, strecke, fahrMin: fahrt, anteile, strasse,
+        auto: !!auto, gemischt: !!auto && strecke > 0 && anteile[klasse] < strecke * 0.85,
         laengeM, durchMin: durchlaufMin(laengeM, v),
         abstand: par.abstand[klasse]
       };

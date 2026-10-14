@@ -20,11 +20,12 @@ import {
 } from './daten.js';
 import { leseGpx } from './gpx.js';
 import {
-  routeAusGpx, kpHinzufuegen, kpEntfernen, kpOrdnen, kpAnTrackSetzen, trackKm, kpPosition, routeLoeschen
+  routeAusGpx, artenUebernehmen, kpHinzufuegen, kpEntfernen, kpOrdnen, kpAnTrackSetzen, trackKm, kpPosition, routeLoeschen
 } from './route.js';
 import { karteErzeugen } from './karte.js';
 import { drucken, pdfName } from './druck.js';
 import { beispielFuellen } from './beispiel.js';
+import { analysiere, anteileImAbschnitt } from './strassenart.js';
 
 const $ = (sel) => document.querySelector(sel);
 const editor = $('#editor');
@@ -165,7 +166,7 @@ function kpTabelle(p) {
       <td><select data-p="${pf('typ')}" data-typ="text" data-neu="1" aria-label="Art des Punkts ${i + 1}">${kpOptionen(PUNKTTYPEN, kp.typ)}</select></td>
       <td><input type="text" data-p="${pf('ort')}" data-typ="text" value="${e(kp.ort)}" placeholder="Ort" aria-label="Ort ${i + 1}"></td>
       <td><input type="text" data-p="${pf('strasse')}" data-typ="text" value="${e(kp.strasse)}" placeholder="z. B. B 28" ${i === 0 ? 'disabled title="Der Ablaufpunkt hat keinen Abschnitt davor"' : ''} aria-label="Straße bis Punkt ${i + 1}"></td>
-      <td><select data-p="${pf('klasse')}" data-typ="text" ${i === 0 ? 'disabled' : ''} aria-label="Straßenart bis Punkt ${i + 1}">${KLASSEN.map(k => `<option value="${k.id}" ${k.id === kp.klasse ? 'selected' : ''}>${k.kurz}</option>`).join('')}</select></td>
+      <td><select data-p="${pf('klasse')}" data-typ="text" ${i === 0 ? 'disabled' : ''} aria-label="Straßenart bis Punkt ${i + 1}">${p.route.arten || kp.klasse === 'auto' ? `<option value="auto" ${kp.klasse === 'auto' ? 'selected' : ''}>Auto (OSM)</option>` : ''}${KLASSEN.map(k => `<option value="${k.id}" ${k.id === kp.klasse ? 'selected' : ''}>${k.kurz}</option>`).join('')}</select></td>
       <td class="num"><input type="number" step="0.1" min="0" data-p="${pf('km')}" data-typ="zahl" data-nachsort="1" value="${e(Math.round(kp.km * 100) / 100)}" aria-label="Kilometerstand ${i + 1}" ${p.route.track.length ? '' : ''}></td>
       <td class="num"><input type="number" step="1" min="0" data-p="${pf('halt')}" data-typ="zahl" value="${e(kp.halt ?? '')}" placeholder="${vorgabe ? zahl(vorgabe, 0) : '0'}" aria-label="Halt in Minuten ${i + 1}"></td>
       <td class="abgeleitet" data-an="${kp.id}"></td>
@@ -197,11 +198,12 @@ function vRoute(p) {
     <section class="block"><h2>Kontrollpunkte</h2>
       <div class="leiste">
         <button type="button" class="knopf" data-aktion="kp-neu">＋ Kontrollpunkt</button>
+        <button type="button" class="knopf" data-aktion="strassenarten" title="Straßenart und Straßennummer entlang der Route aus OpenStreetMap neu bestimmen">Straßenarten neu ermitteln</button>
         <button type="button" class="knopf" data-aktion="orte-ermitteln" title="Ortsnamen aus OpenStreetMap vorschlagen">Ortsnamen ermitteln</button>
         <button type="button" class="knopf gefahr" data-aktion="route-loeschen">Route entfernen</button>
       </div>
       <div class="rolle-tabelle" id="kp-bereich"></div>
-      <p class="hinweis" style="margin:10px 0 0">„Straßenart“ gilt für den Abschnitt <em>bis zu</em> diesem Punkt und bestimmt Geschwindigkeit und Fahrzeugabstand. „Halt“ leer lassen = Vorgabe der Punktart.</p>
+      <p class="hinweis" style="margin:10px 0 0">„Straßenart“ gilt für den Abschnitt <em>bis zu</em> diesem Punkt und bestimmt Geschwindigkeit und Fahrzeugabstand. „Auto (OSM)“ rechnet den Abschnitt anteilig nach den Straßenarten, die OpenStreetMap entlang der Route kennt; eine feste Wahl überstimmt das. Die Straße bleibt leer, wenn OSM sie liefert, und lässt sich überschreiben. „Halt“ leer lassen = Vorgabe der Punktart.</p>
     </section>`;
 }
 
@@ -534,7 +536,7 @@ function abgeleitetAktualisieren() {
     if (info) {
       const hat = p.route.track.length > 1;
       info.innerHTML = hat
-        ? `<strong>${e(p.route.name || 'Route')}</strong> · Track ${zahl(trackKm(p.route), 1)} km · ${p.route.track.length} Stützpunkte · ${p.route.kontrollpunkte.length} Kontrollpunkte${fp.zeilen.length > 1 ? ` · Marschzeit ${dauerText(fp.ende - fp.start)}` : ''}`
+        ? `<strong>${e(p.route.name || 'Route')}</strong> · Track ${zahl(trackKm(p.route), 1)} km · ${p.route.track.length} Stützpunkte · ${p.route.kontrollpunkte.length} Kontrollpunkte${p.route.arten ? ' · Straßenarten aus OSM' : ''}${fp.zeilen.length > 1 ? ` · Marschzeit ${dauerText(fp.ende - fp.start)}` : ''}`
         : `Kein Streckenverlauf geladen${p.route.kontrollpunkte.length ? ` · ${p.route.kontrollpunkte.length} Kontrollpunkte von Hand` : ''}.`;
     }
   }
@@ -665,6 +667,7 @@ const AKTIONEN = {
   },
 
   'orte-ermitteln'() { orteErmitteln(); },
+  strassenarten() { strassenartenErmitteln(); },
 
   'k-neu'() {
     store.aendern(p => {
@@ -799,6 +802,7 @@ async function gpxLaden(datei) {
   if (ansicht !== 'route') gehe('route'); else render();
   const extra = ergebnis.verworfen ? ` · ${ergebnis.verworfen} Wegpunkt(e) weit abseits der Strecke ignoriert` : '';
   meldung(`Route geladen: ${zahl(ergebnis.laengeKm, 1)} km, ${ergebnis.punkte} Kontrollpunkte${extra}`);
+  strassenartenErmitteln({ automatisch: true });
 }
 
 addEventListener('dragover', ev => {
@@ -849,6 +853,39 @@ async function orteErmitteln() {
     meldung(`Ortsnamen konnten nicht abgefragt werden: ${err.message}`, 'fehler');
   } finally {
     ortslauf = false;
+  }
+}
+
+/* ---------- Straßenarten aus OpenStreetMap ---------- */
+
+let artenlauf = false;
+async function strassenartenErmitteln({ automatisch = false } = {}) {
+  if (artenlauf) return;
+  const p = store.aktuell();
+  if (p.route.track.length < 2) { meldung('Zuerst eine Route laden.', 'fehler'); return; }
+  if (erinnern('mp.overpass') !== 'ja') {
+    const ok = confirm('Straßenarten erkennen?\n\nDazu wird der Streckenverlauf (vereinfacht) in Stücken an Overpass (overpass-api.de, OpenStreetMap) gesendet, um die Straßen entlang der Route abzufragen. Die Zustimmung wird in diesem Browser gemerkt.\n\nOhne Zustimmung rechnet der Marschplaner alle Abschnitte als Bundes-/Landstraße; die Straßenart lässt sich dann von Hand setzen.');
+    if (!ok) { if (automatisch) meldung('Straßenarten nicht ermittelt – alle Abschnitte gelten als Bundes-/Landstraße.'); return; }
+    merken('mp.overpass', 'ja');
+  }
+  artenlauf = true;
+  const id = p.id, track = p.route.track;
+  try {
+    const arten = await analysiere(track, (fertig, gesamt) =>
+      meldung(fertig < gesamt ? `Straßenarten werden bei OpenStreetMap abgefragt … ${fertig + 1} von ${gesamt}` : 'Straßenarten werden ausgewertet …'));
+    const jetzt = store.aktuell();
+    if (jetzt.id !== id || jetzt.route.track !== track) { meldung('Die Planung hat sich während der Abfrage geändert – Ergebnis verworfen.', 'fehler'); return; }
+    store.aendern(pp => artenUebernehmen(pp, arten));
+    if (ansicht === 'route') { routeAktualisieren(); renderNav(); }
+    const km = trackKm(jetzt.route);
+    const a = anteileImAbschnitt(arten, 0, km);
+    const bekannt = km - a.unbekannt;
+    meldung(`Straßenarten erkannt: BAB ${zahl(a.anteile.bab, 0)} km · BuL ${zahl(a.anteile.bul, 0)} km · Ort ${zahl(a.anteile.ort, 0)} km`
+      + (a.unbekannt > km * 0.1 ? ` – für ${zahl(a.unbekannt, 0)} km fand OSM keine Straße nahe der Route (zählt als BuL)` : ''), a.unbekannt > km * 0.1 || bekannt <= 0 ? 'fehler' : '');
+  } catch (err) {
+    meldung(`Straßenarten konnten nicht abgefragt werden: ${err.message} – die Abschnitte gelten bis dahin als Bundes-/Landstraße.`, 'fehler');
+  } finally {
+    artenlauf = false;
   }
 }
 

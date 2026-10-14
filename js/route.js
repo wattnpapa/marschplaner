@@ -67,6 +67,7 @@ export function routeAusGpx(p, gpx, { toleranzM = 6 } = {}) {
   p.route.name = gpx.name || '';
   p.route.quelle = 'gpx';
   p.route.kontrollpunkte = kps;
+  p.route.arten = null;                       // gehört zum alten Track
   if (!p.kopf.von && kps[0].ort) p.kopf.von = kps[0].ort;
   if (!p.kopf.nach && kps[kps.length - 1].ort) p.kopf.nach = kps[kps.length - 1].ort;
   return { laengeKm: laenge, punkte: kps.length, verworfen };
@@ -105,5 +106,12 @@ export function routeLoeschen(p) {
   p.route.track = [];
   p.route.name = '';
   p.route.quelle = '';
+  p.route.arten = null;
   p.route.kontrollpunkte = [];
+}
+
+/** Übernimmt das OSM-Profil der Straßenarten; alle Abschnitte rechnen danach anteilig („auto“) */
+export function artenUebernehmen(p, arten) {
+  p.route.arten = arten;
+  for (const kp of p.route.kontrollpunkte) kp.klasse = 'auto';
 }

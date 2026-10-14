@@ -13,7 +13,7 @@ geben. Fremdcode liegt entpackt unter `vendor/` (Leaflet) und steht in `LIZENZEN
 **Alle Pfade relativ.** Die Seite muss in einem Unterverzeichnis laufen (GitHub Pages).
 
 **Die Daten bleiben auf dem Gerät.** Kein Server, kein Konto. Nach außen gehen nur
-Kartenkacheln und – nach Rückfrage – Nominatim-Abfragen. Jede weitere Verbindung ist ein
+Kartenkacheln sowie – nach Rückfrage – Nominatim- und Overpass-Abfragen (`strassenart.js`). Jede weitere Verbindung ist ein
 Bruch mit der Zusage in der README und braucht eine ausdrückliche Entscheidung.
 
 **Zustand nur über `js/state.js`.** Änderungen laufen durch `aendern(fn, schluessel)`,
@@ -21,7 +21,7 @@ sonst greifen Speichern, Rückgängig und Neuzeichnen nicht. Wird das Schema erw
 `SCHEMA` in `daten.js` hochzählen und alte Stände in `migrieren()` umsetzen – im
 `localStorage` der Nutzer liegen echte Planungen.
 
-**Rechnen ohne Oberfläche.** `js/rechnen.js`, `geo.js`, `gpx.js`, `route.js` kennen kein DOM
+**Rechnen ohne Oberfläche.** `js/rechnen.js`, `geo.js`, `gpx.js`, `route.js`, `strassenart.js` kennen kein DOM
 und werden mit `node --test tests/` geprüft. Neue Formeln gehören dorthin und bekommen
 einen Test. `blaetter.js` erzeugt reines HTML (Projekt rein, String raus) für Vorschau
 *und* Druck; `css/blatt.css` gibt den Blättern ihr Aussehen, `css/print.css` Seitenformat

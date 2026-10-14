@@ -7,6 +7,7 @@
 
 import { teilTrack, naechsterKm, punktBeiKm } from './geo.js';
 import { sortierteKp, KLASSE_KURZ, TYP_NAME, zahl } from './rechnen.js';
+import { klassenLaeufe } from './strassenart.js';
 
 export const STRASSENFARBE = { bab: '#c62828', bul: '#003399', ort: '#1b7a3d' };
 
@@ -53,7 +54,7 @@ export function karteErzeugen(host, rueck) {
     const kps = sortierteKp(p.route);
     const sig = JSON.stringify([
       track.length, track[0], track[track.length - 1],
-      kps.map(k => [k.id, k.km, k.typ, k.klasse, k.ort])
+      kps.map(k => [k.id, k.km, k.typ, k.klasse, k.ort, k.strasse]), p.route.arten ? p.route.arten.k.length : 0
     ]);
     const trackSig = JSON.stringify([track.length, track[0], track[track.length - 1]]);
     if (sig === letzteSignatur && !einpassen) return;
@@ -66,14 +67,20 @@ export function karteErzeugen(host, rueck) {
       L.polyline(track, { color: '#5c6879', weight: 4, opacity: 0.85 }).addTo(ebene);
     }
     for (let i = 1; i < kps.length; i++) {
-      const teil = teilTrack(track, kps[i - 1].km, kps[i].km);
-      if (teil.length < 2) continue;
-      const linie = L.polyline(teil, {
-        color: STRASSENFARBE[kps[i].klasse] || STRASSENFARBE.bul,
-        weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round'
-      }).addTo(ebene);
-      linie.bindTooltip(`${KLASSE_KURZ[kps[i].klasse] || ''} ${kps[i].strasse || ''}`.trim() || 'Abschnitt', { sticky: true });
-      linie.on('click', ev => popupAufTrack(track, ev.latlng));
+      // „auto“: Straßenart wechselt innerhalb des Abschnitts → in Läufe zerlegen
+      const laeufe = kps[i].klasse === 'auto' && p.route.arten
+        ? klassenLaeufe(p.route.arten, kps[i - 1].km, kps[i].km)
+        : [{ klasse: kps[i].klasse, von: kps[i - 1].km, bis: kps[i].km }];
+      for (const lauf of laeufe) {
+        const teil = teilTrack(track, lauf.von, lauf.bis);
+        if (teil.length < 2) continue;
+        const linie = L.polyline(teil, {
+          color: STRASSENFARBE[lauf.klasse] || STRASSENFARBE.bul,
+          weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round'
+        }).addTo(ebene);
+        linie.bindTooltip(`${KLASSE_KURZ[lauf.klasse] || ''} ${kps[i].strasse || ''}`.trim() || 'Abschnitt', { sticky: true });
+        linie.on('click', ev => popupAufTrack(track, ev.latlng));
+      }
     }
 
     kps.forEach((kp, i) => {

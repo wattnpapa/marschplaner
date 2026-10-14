@@ -193,7 +193,7 @@ export function neuesProjekt(name = 'Neue Marschplanung') {
       anlagen: '', verteiler: '', quittung: ''
     },
     kolonnen: [neueKolonne(1)],
-    route: { name: '', quelle: '', track: [], kontrollpunkte: [] },
+    route: { name: '', quelle: '', track: [], arten: null, kontrollpunkte: [] },
     unterlagen: {
       zeilen: UNTERLAGEN_STANDARD.map(z => ({ id: neueId('u'), name: z.name, rollen: [...z.rollen] }))
     },

@@ -13,6 +13,12 @@ keine Cookies; Planungen liegen im `localStorage` des Browsers und lassen sich a
 
 - **GPX laden** (Track, Route, Wegpunkte; Drag & Drop). Benannte Wegpunkte werden
   Kontrollpunkte, Ablauf- und Zielpunkt ergeben sich aus Anfang und Ende.
+- **Straßenarten automatisch:** Nach dem Import fragt der Marschplaner OpenStreetMap
+  (Overpass) entlang der Route ab und bestimmt alle 100 m Straßenart (Autobahn,
+  Bundes-/Landstraße, Ortschaft) und Straßennummer. Jeder Abschnitt wird anteilig
+  gerechnet (z. B. 70 % BuL, 30 % Ort) und trägt seine Straßennummern („A 81 / B 27“).
+  Ein fester Wert am Kontrollpunkt überstimmt das. „Ortschaft“ wird aus Straßenklasse und
+  Höchstgeschwindigkeit geschlossen – ein Vorschlag, den die Planerin prüft.
 - **Karte** mit Abschnitten nach Straßenart (BAB / BuL / Ort); Kontrollpunkte lassen
   sich entlang der Strecke ziehen, ein Klick auf die Strecke setzt neue.
 - **Rechnung** je Marschkolonne: Fahrzeit nach Straßenart, Halte, Uhrzeiten,
@@ -49,15 +55,23 @@ python3 -m http.server 8765      # dann http://localhost:8765
 node --test tests/               # Rechenkern, GPX, Blätter
 ```
 
-Die Seite funktioniert auch in einem Unterverzeichnis (alle Pfade relativ) und lässt
-sich so auf GitHub Pages veröffentlichen: Einstellungen → Pages → Branch `main`, Ordner `/`.
+Veröffentlicht wird über GitHub Actions (`.github/workflows/pages.yml`): Bei jedem Push auf
+`main` laufen die Tests, dann geht die Seite nach GitHub Pages (Settings → Pages →
+Source: „GitHub Actions“). Alle Pfade sind relativ, die Seite läuft auch in einem Unterverzeichnis.
 
 ## Datenschutz
 
 Nach außen gehen nur die Kartenkacheln von `tile.openstreetmap.org` (der Anbieter sieht
 den betrachteten Kartenausschnitt) und – nur nach ausdrücklicher Rückfrage – Koordinaten
 einzelner Kontrollpunkte an `nominatim.openstreetmap.org`, wenn „Ortsnamen ermitteln“
-gedrückt wird. Die Planung selbst verlässt den Browser nicht.
+gedrückt wird. Die automatische Straßenerkennung sendet den vereinfachten Streckenverlauf in
+Stücken von 20 km an `overpass-api.de` (Ausweichserver: `overpass.kumi.systems`); der Browser
+fragt dafür einmalig um Zustimmung und merkt sie sich. Ohne Zustimmung gelten alle Abschnitte
+als Bundes-/Landstraße. Die Planung selbst verlässt den Browser nicht.
+
+## Lizenz
+
+EUPL-1.2, siehe `LICENSE`; Fremdbibliotheken in `LIZENZEN.md`.
 
 ## Hinweise zur Vorlage
 
