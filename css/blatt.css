@@ -1,0 +1,151 @@
+/* blatt.css – Aussehen der Blätter (Bildschirmvorschau und Druck)
+   Maße in mm, damit die Vorschau dem Papier entspricht. Schwarz auf Weiß:
+   Die Blätter werden meist schwarz-weiß gedruckt. */
+
+.blatt {
+  --rand: 10mm;
+  box-sizing: border-box;
+  position: relative;
+  width: 210mm;
+  min-height: 297mm;
+  padding: var(--rand);
+  margin: 0 auto 6mm;
+  background: #fff;
+  color: #000;
+  font: 9pt/1.28 Arial, Helvetica, "Liberation Sans", sans-serif;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.blatt.quer { width: 297mm; min-height: 210mm; }
+.blatt * { box-sizing: border-box; }
+
+.blatt table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.blatt th, .blatt td { padding: 0.7mm 1.3mm; vertical-align: top; text-align: left; font-weight: 400; }
+.blatt small { display: block; font-size: 0.78em; color: #333; line-height: 1.2; }
+.blatt strong { font-weight: 700; }
+
+.blatt .raster th, .blatt .raster td { border: 0.25mm solid #000; }
+.blatt .raster th { background: #e9edf3; font-weight: 700; }
+
+/* ---- Kopfzeile ---- */
+.blatt .blattkopf { margin-bottom: 3mm; }
+.blatt .blattkopf td { border: 0.5mm solid #000; padding: 1.6mm 2.4mm; vertical-align: middle; }
+.blatt .kopf-nr { width: 24mm; font-weight: 700; font-size: 11pt; background: #e9edf3; }
+.blatt .kopf-titel { font-weight: 700; font-size: 15pt; text-align: center; letter-spacing: 0.02em; }
+.blatt .kopf-kennung { width: 58mm; text-align: right; font-weight: 700; font-size: 10pt; }
+.blatt .untertitel { margin: 0 0 3mm; font-size: 10pt; font-weight: 700; text-align: center; }
+.blatt .zwischentitel { margin: 4mm 0 1.5mm; font-size: 10pt; text-transform: uppercase; letter-spacing: 0.06em; }
+.blatt .leerhinweis { margin: 6mm 0; padding: 4mm; border: 0.3mm dashed #666; text-align: center; color: #333; }
+
+/* ---- Fußzeile ---- */
+.blatt-fuss {
+  margin-top: 5mm; padding-top: 1.2mm; border-top: 0.2mm solid #888;
+  font-size: 6.4pt; line-height: 1.25; color: #444;
+}
+
+/* ---- Marschauftrag ---- */
+.blatt .auftrag { margin-bottom: 2.4mm; }
+.blatt .auftrag th.nr { width: 22mm; }
+.blatt .auftrag .text { white-space: pre-line; min-height: 6mm; height: 7mm; }
+.blatt .auftrag tr.gross .text { height: 26mm; }
+.blatt .auftrag tr.abschnitt th { background: #d9dfe9; font-size: 10pt; }
+.blatt .auftrag tr.abschnitt small { display: inline; font-weight: 400; font-size: 7.4pt; margin-left: 1.5mm; }
+.blatt .auftrag tr { break-inside: avoid; }
+.blatt .unterschrift { margin: 6mm 0 2.4mm; }
+.blatt .unterschrift .eintrag td { height: 13mm; vertical-align: bottom; }
+.blatt .unterschrift .etikett th { font-weight: 400; font-size: 7.6pt; background: #fff; }
+
+/* ---- Kopfinfo + Parameter ---- */
+.blatt .seitlich { display: flex; gap: 4mm; align-items: flex-start; margin-bottom: 3mm; }
+.blatt .seitlich .kopfinfo { flex: 1 1 55%; }
+.blatt .seitlich .parameter { flex: 1 1 45%; }
+.blatt .kopfinfo { margin-bottom: 3mm; }
+.blatt .seitlich .kopfinfo { margin-bottom: 0; }
+.blatt .kopfinfo th { width: 34mm; }
+.blatt .kopfinfo td { font-weight: 700; }
+.blatt .seitlich .kopfinfo th:nth-of-type(2) { width: 22mm; }
+.blatt .parameter th { font-size: 7.6pt; text-align: center; }
+.blatt .parameter th:first-child { text-align: left; width: 44mm; }
+.blatt .parameter td { text-align: center; font-weight: 700; }
+
+/* ---- Tabellen allgemein ---- */
+.blatt .tabelle th { text-align: center; vertical-align: middle; }
+.blatt .tabelle td.zahl, .blatt .tabelle th.zahl { text-align: right; font-variant-numeric: tabular-nums; }
+.blatt .tabelle thead { display: table-header-group; }
+.blatt .tabelle tr { break-inside: avoid; }
+
+/* ---- Marschtabelle ---- */
+.blatt .marschtabelle { font-size: 8.6pt; }
+.blatt .marschtabelle .c-uhr { width: 17mm; }
+.blatt .marschtabelle .c-nr { width: 12mm; }
+.blatt .marschtabelle .c-ort { width: 46mm; }
+.blatt .marschtabelle .c-str { width: 34mm; }
+.blatt .marschtabelle .c-km { width: 14mm; }
+.blatt .marschtabelle .c-min { width: 14mm; }
+.blatt .marschtabelle .c-lang { width: 21mm; }
+.blatt .marschtabelle .c-durch { width: 22mm; }
+.blatt .marschtabelle tr.punkt td { background: #f3f5f9; border-top-width: 0.45mm; }
+.blatt .marschtabelle tr.punkt td.uhr { font-weight: 700; font-variant-numeric: tabular-nums; }
+.blatt .marschtabelle tr.punkt td.nr { text-align: center; font-weight: 700; }
+.blatt .marschtabelle tr.abschnitt td { height: 7mm; }
+.blatt .marschtabelle td.bem { font-size: 7.8pt; }
+.blatt .marschtabelle td.strasse { font-weight: 700; }
+.blatt .marschtabelle tfoot td { border: 0; padding-top: 2mm; font-size: 7pt; color: #333; }
+.blatt .marschtabelle tfoot { display: table-footer-group; }
+
+/* ---- Marschskizze ---- */
+.blatt .skizzentabelle .c-nr { width: 11mm; }
+.blatt .skizzentabelle .c-skizze { width: 74mm; }
+.blatt .skizzentabelle .c-km { width: 15mm; }
+.blatt .skizzentabelle .c-ort { width: 36mm; }
+.blatt .skizzentabelle tbody tr { height: 28mm; }
+.blatt .skizzentabelle td.nr { text-align: center; font-weight: 700; font-size: 11pt; vertical-align: middle; }
+.blatt .skizzentabelle td.zahl { vertical-align: middle; text-align: center; }
+.blatt .skizzentabelle td.ort { vertical-align: middle; }
+.blatt .skizzentabelle td.skizzenfeld { padding: 0.6mm; }
+.blatt .skizzentabelle td.hinweise { font-size: 8pt; }
+.blatt svg.skizze { display: block; width: 100%; height: 26mm; }
+.blatt svg.uebersicht { display: block; width: 100%; height: auto; max-height: 72mm; border: 0.25mm solid #000; margin-bottom: 3mm; }
+.blatt .skizzenfeld.gross { height: 60mm; border: 0.25mm solid #000; margin-bottom: 3mm; }
+
+/* ---- Straßenbelegungsplan ---- */
+.blatt svg.diagramm { display: block; width: 100%; height: auto; margin-bottom: 3mm; }
+.blatt .belegungstabelle { font-size: 7pt; margin-bottom: 2mm; }
+.blatt .belegungstabelle th, .blatt .belegungstabelle td { text-align: center; padding: 0.5mm 0.6mm; }
+.blatt .belegungstabelle th.zeilenkopf { width: 40mm; text-align: left; }
+.blatt .halttabelle { font-size: 8pt; }
+.blatt .halttabelle td { text-align: center; }
+.blatt .halttabelle td:first-child, .blatt .halttabelle td:nth-child(2) { text-align: left; }
+.blatt .halttabelle tr.konflikt td { background: #fde8e8; font-weight: 700; }
+
+/* ---- Unterlagenverteilung ---- */
+.blatt .unterlagen th.rolle { width: 17mm; height: 44mm; padding: 1mm 0; vertical-align: bottom; }
+.blatt .unterlagen th.rolle span { writing-mode: vertical-rl; transform: rotate(180deg); display: block; margin: 0 auto; white-space: nowrap; font-size: 8pt; }
+.blatt .unterlagen td.text { padding: 1.4mm 1.8mm; }
+.blatt .unterlagen td.kreuz { text-align: center; font-weight: 700; font-size: 11pt; vertical-align: middle; }
+.blatt .unterlagen tbody tr { height: 8mm; }
+.blatt .unterlagen tbody td.text { vertical-align: middle; }
+
+/* ---- Weg-Zeit-Tabelle, Durchlaufzeit ---- */
+.blatt .wegzeit { font-size: 8pt; }
+.blatt .wegzeit th, .blatt .wegzeit td { text-align: center; padding: 0.35mm 0.8mm; }
+.blatt .wegzeit tbody th { background: #f3f5f9; width: 22mm; }
+.blatt .wegzeit tr.einheit th { font-size: 7.6pt; background: #fff; }
+.blatt .wegzeit tbody tr:nth-child(5n) td, .blatt .wegzeit tbody tr:nth-child(5n) th { border-bottom-width: 0.45mm; }
+.blatt .durchlauf { max-width: 150mm; margin: 0 auto; }
+.blatt .durchlauf tbody th { background: #f3f5f9; }
+.blatt .durchlauf td { text-align: center; }
+.blatt .durchlauf th, .blatt .durchlauf td { padding: 1.1mm 2mm; }
+
+/* ---- Hilfestellung ---- */
+.blatt .hilfe { max-width: 250mm; }
+.blatt .hilfe th { width: 62mm; }
+.blatt .hilfe td.eingabe { width: 44mm; background: #fff6c7; text-align: right; font-weight: 700; }
+.blatt .hilfe td.ergebnis { width: 44mm; background: #d9f0dd; text-align: right; font-weight: 700; font-size: 11pt; }
+.blatt .hilfe td.hinweis { font-size: 7.6pt; color: #333; }
+.blatt .hilfe tr.trenn th, .blatt .hilfe tr.trenn td { border-top-width: 0.6mm; }
+.blatt .hilfe th, .blatt .hilfe td { height: 7.6mm; vertical-align: middle; }
+.blatt .legende { margin: 4mm 0 0; font-size: 8pt; }
+.blatt .legende .kasten { display: inline-block; width: 4mm; height: 3mm; border: 0.2mm solid #000; margin: 0 1mm 0 3mm; vertical-align: middle; }
+.blatt .legende .kasten.eingabe { background: #fff6c7; }
+.blatt .legende .kasten.ergebnis { background: #d9f0dd; }

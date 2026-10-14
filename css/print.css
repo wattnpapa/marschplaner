@@ -1,0 +1,25 @@
+/* print.css – Seitengröße und Umbrüche
+   Gedruckt wird nur der Inhalt von #druck; die Anwendung selbst ist dann
+   ausgeblendet. Jedes Blatt trägt seine Ausrichtung als benannte Seite, so
+   können hohe und quere Blätter in einem Druckauftrag stehen. */
+
+@page { size: A4 portrait; margin: 10mm; }
+@page hoch { size: A4 portrait; margin: 10mm; }
+@page quer { size: A4 landscape; margin: 10mm; }
+
+#druck { display: none; }
+
+@media print {
+  html, body { background: #fff !important; height: auto !important; overflow: visible !important; }
+  body.druckt #app, body.druckt .dialog, body.druckt .toast { display: none !important; }
+  body.druckt #druck { display: block; }
+
+  #druck .blatt {
+    width: auto; min-height: 0; padding: 0; margin: 0;
+    box-shadow: none; zoom: 1 !important;
+    break-after: page; page-break-after: always;
+  }
+  #druck .blatt:last-child { break-after: auto; page-break-after: auto; }
+  #druck .blatt.hoch { page: hoch; }
+  #druck .blatt.quer { page: quer; }
+}
