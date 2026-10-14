@@ -65,7 +65,7 @@ Nach außen gehen nur die Kartenkacheln von `tile.openstreetmap.org` (der Anbiet
 den betrachteten Kartenausschnitt) und – nur nach ausdrücklicher Rückfrage – Koordinaten
 einzelner Kontrollpunkte an `nominatim.openstreetmap.org`, wenn „Ortsnamen ermitteln“
 gedrückt wird. Die automatische Straßenerkennung sendet den vereinfachten Streckenverlauf in
-Stücken von 8 km an `overpass-api.de` (Ausweichserver: `overpass.kumi.systems`); der Browser
+Stücken von 10 km an `overpass-api.de` (Ausweichserver: `overpass.kumi.systems`); der Browser
 fragt dafür einmalig um Zustimmung und merkt sie sich. Ohne Zustimmung gelten alle Abschnitte
 als Bundes-/Landstraße. Die Planung selbst verlässt den Browser nicht.
 

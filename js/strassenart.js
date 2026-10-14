@@ -1,6 +1,6 @@
 // strassenart.js – Straßenart und Straßennummer entlang der Route aus OpenStreetMap
 //
-// Ablauf: Die Route wird in Stücken von 8 km bei Overpass abgefragt (alle Straßen
+// Ablauf: Die Route wird in Stücken von 10 km bei Overpass abgefragt (alle Straßen
 // im Umkreis des Tracks). Der Track wird alle 100 m abgetastet; jeder Abtastpunkt
 // bekommt die nächstgelegene Straße. Gespeichert wird je 100 m nur die Straßenart
 // ('b' Autobahn, 'l' Bundes-/Landstraße, 'o' Ortschaft, 'x' unbekannt) und ein
@@ -24,7 +24,8 @@ const RANG = { motorway: 6, trunk: 5, primary: 4, secondary: 3, tertiary: 2, unc
 const MAX_ABSTAND_M = 40;       // weiter weg gilt ein Abtastpunkt als ohne Straße
 const GLEICHSTAND_M = 6;        // bei fast gleichem Abstand gewinnt die höherrangige Straße
 const SCHRITT_KM = 0.1;
-const STUECK_KM = 8;
+const STUECK_KM = 10;
+const PAUSE_MS = 2500;          // Abstand zwischen zwei Abfragen (Kontingent je IP)
 const RAD = Math.PI / 180;
 const M_PRO_GRAD = 111195;
 
@@ -34,33 +35,41 @@ const KLASSE = { b: 'bab', l: 'bul', o: 'ort' };
 /** Overpass-Abfrage für alle Straßen im Umkreis des Tracks */
 export function abfrage(track, radiusM = 30) {
   let toleranz = 25, grob = vereinfachen(track, toleranz);
-  while (grob.length > 250 && toleranz < 400) { toleranz *= 2; grob = vereinfachen(track, toleranz); }
+  while (grob.length > 300 && toleranz < 400) { toleranz *= 2; grob = vereinfachen(track, toleranz); }
   const koord = grob.map(p => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(',');
   return `[out:json][timeout:25][maxsize:50000000];way["highway"~"^(${STRASSEN})$"](around:${radiusM},${koord});out tags geom;`;
 }
 
 /**
  * Ruft Overpass ab und gibt die Wege mit Geometrie zurück. Die öffentlichen
- * Server sind zeitweise überlastet (429/504) oder liefern eine Fehlerseite statt
- * JSON; deshalb abwechselnd beide Server, insgesamt bis zu vier Versuche.
+ * Server begrenzen Anfragen je IP (429 „rate_limited“), sind zeitweise überlastet
+ * (504) oder liefern eine Fehlerseite statt JSON. Bei 429 wird geduldig gewartet,
+ * sonst wechseln sich beide Server ab.
+ * @param {(sek:number, grund:string)=>void} [warte] meldet, dass gewartet wird
  */
-export async function ladeWege(track) {
+export async function ladeWege(track, warte = () => {}) {
   const daten = 'data=' + encodeURIComponent(abfrage(track));
   let letzter = null;
-  for (let versuch = 0; versuch < 4; versuch++) {
+  for (let versuch = 0; versuch < 7; versuch++) {
     const url = OVERPASS_URLS[versuch % OVERPASS_URLS.length];
+    let pause = 2 * (versuch + 1);
     try {
       const r = await fetch(url, {
         method: 'POST', body: daten, signal: AbortSignal.timeout(45000),
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
       });
+      if (r.status === 429) { pause = 15; throw new Error(`${new URL(url).host}: Anfragekontingent erschöpft`); }
       if (!r.ok) throw new Error(`${new URL(url).host} antwortet mit ${r.status}`);
+      const text = await r.text();
       let json;
-      try { json = JSON.parse(await r.text()); } catch { throw new Error(`${new URL(url).host} lieferte keine Daten (überlastet?)`); }
+      try { json = JSON.parse(text); } catch {
+        if (/rate_limited/.test(text)) { pause = 15; throw new Error(`${new URL(url).host}: Anfragekontingent erschöpft`); }
+        throw new Error(`${new URL(url).host} lieferte keine Daten (überlastet?)`);
+      }
       return (json.elements || []).filter(x => x.type === 'way' && Array.isArray(x.geometry) && x.geometry.length > 1);
     } catch (err) {
       letzter = err.name === 'TimeoutError' ? new Error(`${new URL(url).host} antwortet nicht`) : err;
-      if (versuch < 3) await new Promise(res => setTimeout(res, 2000 * (versuch + 1)));
+      if (versuch < 6) { warte(pause, letzter.message); await new Promise(res => setTimeout(res, pause * 1000)); }
     }
   }
   throw letzter || new Error('Overpass nicht erreichbar.');
@@ -176,23 +185,25 @@ export function baueArten(proben, laengeKm) {
  * @param {(fertig:number, gesamt:number)=>void} [fortschritt]
  */
 export async function analysiere(track, fortschritt = () => {}) {
+  let hinweis = '';
   const laenge = trackLaengeM(track) / 1000;
   const stuecke = Math.max(1, Math.ceil(laenge / STUECK_KM));
   const proben = [];
   let luecken = 0, letzterFehler = null;
   for (let s = 0; s < stuecke; s++) {
-    fortschritt(s, stuecke);
+    fortschritt(s, stuecke, hinweis);
+    hinweis = '';
     const von = s * STUECK_KM, bis = Math.min(laenge, (s + 1) * STUECK_KM);
     const sub = teilTrack(track, Math.max(0, von - 0.1), Math.min(laenge, bis + 0.1));
     if (sub.length < 2) continue;
     try {
-      const wege = await ladeWege(sub);
+      const wege = await ladeWege(sub, (sek, grund) => fortschritt(s, stuecke, `${grund} – neuer Versuch in ${sek} s`));
       proben.push(...abtasten(track, wege, von, bis));
     } catch (err) {                                  // ein Stück darf fehlen, der Rest zählt
       luecken++;
       letzterFehler = err;
     }
-    if (s < stuecke - 1) await new Promise(r => setTimeout(r, 600));       // dem Dienst Luft lassen
+    if (s < stuecke - 1) await new Promise(r => setTimeout(r, PAUSE_MS));  // Kontingent je IP schonen
   }
   fortschritt(stuecke, stuecke);
   if (luecken === stuecke && letzterFehler) throw letzterFehler;

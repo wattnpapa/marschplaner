@@ -39,11 +39,12 @@ function merken(key, wert) { try { localStorage.setItem(key, wert); } catch { /*
 function erinnern(key) { try { return localStorage.getItem(key); } catch { return null; } }
 
 let toastTimer = null;
-function meldung(text, art = '') {
+function meldung(text, art = '', dauerhaft = false) {
   const t = $('#toast');
   t.textContent = text;
   t.className = `toast sichtbar ${art}`;
   clearTimeout(toastTimer);
+  if (dauerhaft) return;
   toastTimer = setTimeout(() => { t.className = 'toast'; }, art === 'fehler' ? 6000 : 3200);
 }
 
@@ -871,8 +872,8 @@ async function strassenartenErmitteln({ automatisch = false } = {}) {
   artenlauf = true;
   const id = p.id, track = p.route.track;
   try {
-    const arten = await analysiere(track, (fertig, gesamt) =>
-      meldung(fertig < gesamt ? `Straßenarten werden bei OpenStreetMap abgefragt … ${fertig + 1} von ${gesamt}` : 'Straßenarten werden ausgewertet …'));
+    const arten = await analysiere(track, (fertig, gesamt, hinweis) =>
+      meldung(fertig < gesamt ? `Straßenarten werden bei OpenStreetMap abgefragt … ${fertig + 1} von ${gesamt}${hinweis ? ' (' + hinweis + ')' : ''}` : 'Straßenarten werden ausgewertet …', '', true));
     const jetzt = store.aktuell();
     if (jetzt.id !== id || jetzt.route.track !== track) { meldung('Die Planung hat sich während der Abfrage geändert – Ergebnis verworfen.', 'fehler'); return; }
     store.aendern(pp => artenUebernehmen(pp, arten));

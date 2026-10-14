@@ -16,6 +16,6 @@ Leaflet liegt unverändert unter `vendor/leaflet/`; der Lizenztext steht im Kopf
 - **Kartenkacheln** © OpenStreetMap-Mitwirkende (ODbL), `tile.openstreetmap.org`,
   unter der [Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/).
 - **Straßenarten und -nummern:** Overpass API (`overpass-api.de`, Ausweichserver `overpass.kumi.systems`),
-  Daten © OpenStreetMap-Mitwirkende (ODbL); nach einmaliger Zustimmung des Nutzers, in Stücken von 8 km.
+  Daten © OpenStreetMap-Mitwirkende (ODbL); nach einmaliger Zustimmung des Nutzers, in Stücken von 10 km.
 - **Ortsnamen** (nur auf Knopfdruck): Nominatim, `nominatim.openstreetmap.org`,
   höchstens eine Anfrage pro Sekunde.
