@@ -161,7 +161,7 @@ export function neueKolonne(nr = 1) {
 export function neuerKp(typ = 'kp', extra = {}) {
   return {
     id: neueId('p'), typ, ort: '', strasse: '', klasse: 'bul',
-    km: 0, halt: null, bemerkung: '', ...extra
+    km: 0, halt: null, bemerkung: '', abseits: null, umwegKm: 0, ...extra
   };
 }
 
@@ -193,7 +193,7 @@ export function neuesProjekt(name = 'Neue Marschplanung') {
       anlagen: '', verteiler: '', quittung: ''
     },
     kolonnen: [neueKolonne(1)],
-    route: { name: '', quelle: '', track: [], arten: null, kontrollpunkte: [] },
+    route: { name: '', quelle: '', track: [], arten: null, plaetze: null, kontrollpunkte: [] },
     unterlagen: {
       zeilen: UNTERLAGEN_STANDARD.map(z => ({ id: neueId('u'), name: z.name, rollen: [...z.rollen] }))
     },
@@ -205,6 +205,7 @@ export function neuesProjekt(name = 'Neue Marschplanung') {
       wegZeit: { bisKm: 200 },
       durchlauf: { vA: 40, vB: 70, fahrzeugLaenge: 7, bisN: 30 }
     },
+    suche: { radius: 1000, intervall: 120, fenster: 30, kapazitaet: 0, rast: true, tank: false, parkplatz: true },
     druck: { skizzeAuto: true }
   };
 }

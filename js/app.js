@@ -20,12 +20,13 @@ import {
 } from './daten.js';
 import { leseGpx } from './gpx.js';
 import {
-  routeAusGpx, artenUebernehmen, kpHinzufuegen, kpEntfernen, kpOrdnen, kpAnTrackSetzen, trackKm, kpPosition, routeLoeschen
+  routeAusGpx, artenUebernehmen, kpAusPlatz, kpHinzufuegen, kpEntfernen, kpOrdnen, kpAnTrackSetzen, trackKm, kpPosition, routeLoeschen
 } from './route.js';
 import { karteErzeugen } from './karte.js';
 import { drucken, pdfName } from './druck.js';
 import { beispielFuellen } from './beispiel.js';
 import { analysiere, anteileImAbschnitt, offeneStuecke, passtZu } from './strassenart.js';
+import { sucheEntlang, vorschlagen, ART_NAME, offeneStuecke as offenePlaetze, passtZu as plaetzePassen } from './plaetze.js';
 
 const $ = (sel) => document.querySelector(sel);
 const editor = $('#editor');
@@ -170,13 +171,14 @@ function kpTabelle(p) {
       <td><select data-p="${pf('klasse')}" data-typ="text" ${i === 0 ? 'disabled' : ''} aria-label="Straßenart bis Punkt ${i + 1}">${p.route.arten || kp.klasse === 'auto' ? `<option value="auto" ${kp.klasse === 'auto' ? 'selected' : ''}>Auto (OSM)</option>` : ''}${KLASSEN.map(k => `<option value="${k.id}" ${k.id === kp.klasse ? 'selected' : ''}>${k.kurz}</option>`).join('')}</select></td>
       <td class="num"><input type="number" step="0.1" min="0" data-p="${pf('km')}" data-typ="zahl" data-nachsort="1" value="${e(Math.round(kp.km * 100) / 100)}" aria-label="Kilometerstand ${i + 1}" ${p.route.track.length ? '' : ''}></td>
       <td class="num"><input type="number" step="1" min="0" data-p="${pf('halt')}" data-typ="zahl" value="${e(kp.halt ?? '')}" placeholder="${vorgabe ? zahl(vorgabe, 0) : '0'}" aria-label="Halt in Minuten ${i + 1}"></td>
+      <td class="num"><input type="number" step="0.1" min="0" data-p="${pf('umwegKm')}" data-typ="zahl" value="${e(kp.umwegKm || '')}" placeholder="0" title="Zusätzliche Strecke für Zu- und Abfahrt zu einem Platz abseits der Strecke (hin und zurück)" aria-label="Umweg in km ${i + 1}"></td>
       <td class="abgeleitet" data-an="${kp.id}"></td>
       <td><input type="text" data-p="${pf('bemerkung')}" data-typ="text" value="${e(kp.bemerkung)}" placeholder="Bemerkung" aria-label="Bemerkung ${i + 1}"></td>
       <td><button type="button" class="knopf klein nur-symbol gefahr" data-aktion="kp-loeschen" data-id="${kp.id}" title="Punkt entfernen" aria-label="Punkt ${i + 1} entfernen">✕</button></td>
     </tr>`;
   }).join('');
   return `<table class="tab kp-tabelle">
-    <thead><tr><th>Nr</th><th>Art</th><th>Ort</th><th>Straße <span class="hinweis">(bis hierher)</span></th><th>Straßenart</th><th class="num">km</th><th class="num">Halt min</th><th>Ankunft</th><th>Bemerkung</th><th></th></tr></thead>
+    <thead><tr><th>Nr</th><th>Art</th><th>Ort</th><th>Straße <span class="hinweis">(bis hierher)</span></th><th>Straßenart</th><th class="num">km</th><th class="num">Halt min</th><th class="num">Umweg km</th><th>Ankunft</th><th>Bemerkung</th><th></th></tr></thead>
     <tbody>${zeilen}</tbody></table>`;
 }
 
@@ -204,7 +206,23 @@ function vRoute(p) {
         <button type="button" class="knopf gefahr" data-aktion="route-loeschen">Route entfernen</button>
       </div>
       <div class="rolle-tabelle" id="kp-bereich"></div>
-      <p class="hinweis" style="margin:10px 0 0">„Straßenart“ gilt für den Abschnitt <em>bis zu</em> diesem Punkt und bestimmt Geschwindigkeit und Fahrzeugabstand. „Auto (OSM)“ rechnet den Abschnitt anteilig nach den Straßenarten, die OpenStreetMap entlang der Route kennt; eine feste Wahl überstimmt das. Die Straße bleibt leer, wenn OSM sie liefert, und lässt sich überschreiben. „Halt“ leer lassen = Vorgabe der Punktart.</p>
+      <p class="hinweis" style="margin:10px 0 0">„Straßenart“ gilt für den Abschnitt <em>bis zu</em> diesem Punkt und bestimmt Geschwindigkeit und Fahrzeugabstand. „Auto (OSM)“ rechnet den Abschnitt anteilig nach den Straßenarten, die OpenStreetMap entlang der Route kennt; eine feste Wahl überstimmt das. Die Straße bleibt leer, wenn OSM sie liefert, und lässt sich überschreiben. „Halt“ leer lassen = Vorgabe der Punktart. „Umweg“ ist die zusätzliche Strecke (hin und zurück) zu einem Platz abseits der Strecke; sie geht in Kilometer und Zeit ein.</p>
+    </section>
+    <section class="block" id="pausen-block"><h2>Pausen und Rastplätze vorschlagen</h2>
+      <p class="lead">Der Marschplaner sucht Rast-, Park- und Tankplätze im Suchradius um die Strecke und schlägt für jede Pause den besten Platz im Zeitfenster vor. Mit einem Klick wird er zum Kontrollpunkt; liegt er abseits, rechnet der Fahrplan den Umweg mit.</p>
+      <div class="formular eng">
+        ${feld('Suchradius um die Strecke', 'suche.radius', p, { typ: 'number', min: 100, max: 10000, schritt: 100, einheit: 'm' })}
+        ${feld('Pause alle', 'suche.intervall', p, { typ: 'number', min: 15, schritt: 5, einheit: 'min', hinweis: 'reine Fahrzeit' })}
+        ${feld('Zeitfenster ±', 'suche.fenster', p, { typ: 'number', min: 5, schritt: 5, einheit: 'min' })}
+        ${feld('Mindest-Stellplätze', 'suche.kapazitaet', p, { typ: 'number', min: 0, schritt: 1, hinweis: `größte Kolonne: ${Math.max(0, ...p.kolonnen.map(k => (k.einzel || 0) + (k.gespanne || 0)))} Fz; 0 = egal` })}
+      </div>
+      <div class="leiste" style="margin:4px 0 10px">
+        <label><input type="checkbox" data-p="suche.rast" data-typ="haken" ${p.suche.rast ? 'checked' : ''}> Rastplätze / Raststätten</label>
+        <label><input type="checkbox" data-p="suche.parkplatz" data-typ="haken" ${p.suche.parkplatz ? 'checked' : ''}> Parkplätze</label>
+        <label><input type="checkbox" data-p="suche.tank" data-typ="haken" ${p.suche.tank ? 'checked' : ''}> Tankstellen</label>
+      </div>
+      <div class="leiste"><button type="button" class="knopf primaer" data-aktion="plaetze-suchen">Plätze entlang der Strecke suchen</button></div>
+      <div id="pausen-ergebnis"></div>
     </section>`;
 }
 
@@ -223,6 +241,102 @@ function routeAktualisieren() {
   $('#karte-leer').hidden = p.route.track.length > 1;
   karte?.aktualisieren(p);
   abgeleitetAktualisieren();
+}
+
+/* ---- Pausen- und Rastplatzvorschläge ---- */
+
+const PLATZ_TYP = { rast: 'Rast', th: 'Techn. Halt', tank: 'Tanken' };
+
+function pausenAktualisieren() {
+  const ziel = $('#pausen-ergebnis');
+  if (!ziel) return;
+  const p = store.aktuell();
+  const pl = p.route.plaetze;
+  const s = p.suche;
+  const radius = +s.radius || 1000;
+  if (p.route.track.length < 2) { ziel.innerHTML = '<p class="hinweis">Zuerst eine Route laden.</p>'; return; }
+  if (!pl?.liste) {
+    ziel.innerHTML = '<p class="hinweis">Noch nicht gesucht. „Plätze entlang der Strecke suchen“ fragt OpenStreetMap ab.</p>';
+    karte?.setzePlaetze([], []); karte?.aktualisieren(p);
+    return;
+  }
+  const arten = [s.rast && 'rast', s.parkplatz && 'parkplatz', s.tank && 'tank'].filter(Boolean);
+  const liste = pl.liste.filter(x => x.abstandM <= radius);
+  const vs = vorschlagen(p, liste, { intervallMin: +s.intervall || 120, fensterMin: +s.fenster || 30, radiusM: radius, kapMin: +s.kapazitaet || 0, arten });
+  const fp = fahrplan(p, p.kolonnen[0] ?? null);
+
+  const hinweise = [];
+  if (offenePlaetze(pl)) hinweise.push(`${offenePlaetze(pl)} von ${pl.fertig.length} Streckenstücken sind noch nicht abgefragt – „Plätze suchen“ holt nur diese nach.`);
+  if (radius > pl.radius) hinweise.push(`Gesucht wurde nur bis ${zahl(pl.radius, 0)} m – für ${zahl(radius, 0)} m bitte neu suchen.`);
+
+  const zeile = (k, i) => `<tr class="${i === 0 ? 'bester' : ''}">
+      <td>${i === 0 ? '★' : ''}</td>
+      <td><strong>${e(k.name || ART_NAME[k.art])}</strong><br><small class="hinweis">${e(ART_NAME[k.art])}</small></td>
+      <td class="num">km ${zahl(k.km, 1)}<br><small class="hinweis">${k.zeitAbweichungMin > 0 ? '+' : ''}${k.zeitAbweichungMin} min</small></td>
+      <td>${k.abstandM} m neben der Strecke${k.umwegKm ? `<br><small class="hinweis">Umweg ca. ${zahl(k.umwegKm, 1)} km</small>` : ''}</td>
+      <td>${k.kapazitaet ? `${k.kapazitaet} Plätze` : '<span class="hinweis">Plätze unbekannt</span>'}${k.lkw ? '<br><small class="hinweis">Lkw</small>' : ''}${k.wc ? '<br><small class="hinweis">WC</small>' : ''}</td>
+      <td style="white-space:nowrap">${Object.entries(PLATZ_TYP).map(([typ, t]) =>
+        `<button type="button" class="knopf klein" data-aktion="platz-nehmen" data-id="${e(k.id)}" data-typ="${typ}">${t}</button>`).join(' ')}</td></tr>`;
+
+  const karten = vs.map(v => `<div class="pause"><h3>Pause ${v.n} · nach ca. ${dauerText(v.tMin)} Fahrzeit · km ${zahl(v.km, 0)} · etwa ${zeitText(fp.start + v.tMin)} Uhr</h3>
+    ${v.kandidaten.length
+      ? `<table class="tab"><tbody>${v.kandidaten.slice(0, 4).map(zeile).join('')}</tbody></table>${v.kandidaten.length > 4 ? `<p class="hinweis">… und ${v.kandidaten.length - 4} weitere auf der Karte.</p>` : ''}`
+      : '<p class="hinweis">Kein passender Platz im Zeitfenster – Radius oder Zeitfenster vergrößern, mehr Platzarten zulassen oder die Mindest-Stellplätze senken.</p>'}</div>`).join('');
+
+  ziel.innerHTML = `${hinweise.map(h => `<div class="vorgabe-hinweis">${e(h)}</div>`).join('')}
+    <p class="hinweis" style="margin:8px 0">${liste.length} Plätze im Radius gefunden${vs.length ? ` · ${vs.length} Pause(n) im Abstand von ${zahl(+s.intervall || 120, 0)} min` : ' · Strecke zu kurz für eine Pause'}.</p>${karten}`;
+
+  const alle = new Map();
+  for (const v of vs) for (const k of v.kandidaten) alle.set(k.id, k);
+  karte?.setzePlaetze([...alle.values()], vs.map(v => v.bester?.id).filter(Boolean));
+  karte?.aktualisieren(p);
+}
+
+function platzNehmen(id, typ) {
+  const p = store.aktuell();
+  const platz = p.route.plaetze?.liste.find(x => x.id === id);
+  if (!platz) return;
+  store.aendern(pp => { kpAusPlatz(pp, platz, typ); });
+  routeAktualisieren();
+  meldung(`„${platz.name || ART_NAME[platz.art]}“ als ${PLATZ_TYP[typ]} übernommen${platz.abstandM >= 50 ? ` – inkl. Umweg ca. ${zahl(2 * platz.abstandM * 1.3 / 1000, 1)} km` : ''}.`);
+}
+
+let platzlauf = false;
+async function plaetzeSuchen() {
+  if (platzlauf) return;
+  const p = store.aktuell();
+  if (p.route.track.length < 2) { meldung('Zuerst eine Route laden.', 'fehler'); return; }
+  const radius = Math.min(10000, Math.max(100, +p.suche.radius || 1000));
+  const laenge = trackKm(p.route);
+  const vorhanden = plaetzePassen(p.route.plaetze, laenge, radius) ? p.route.plaetze : null;
+  if (vorhanden && !offenePlaetze(vorhanden)) { pausenAktualisieren(); meldung('Alle Streckenstücke sind bereits abgefragt – Vorschläge aktualisiert.'); return; }
+  if (erinnern('mp.overpass') !== 'ja') {
+    if (!confirm('Plätze suchen?\n\nDazu wird der Streckenverlauf (vereinfacht) in Stücken an Overpass (overpass-api.de, OpenStreetMap) gesendet. Die Zustimmung wird in diesem Browser gemerkt.')) return;
+    merken('mp.overpass', 'ja');
+  }
+  platzlauf = true;
+  const id = p.id, track = p.route.track;
+  const gleiche = () => { const j = store.aktuell(); return j.id === id && j.route.track === track; };
+  try {
+    const stand = await sucheEntlang(track, radius, {
+      vorhanden,
+      fortschritt: (fertig, gesamt, hinweis) => meldung(fertig < gesamt
+        ? `Plätze werden gesucht … Stück ${fertig + 1} von ${gesamt}${vorhanden ? ' (nur fehlende)' : ''}${hinweis ? ' – ' + hinweis : ''}` : 'Plätze werden ausgewertet …', '', true),
+      beiStueck: (zwischen) => {
+        if (!gleiche()) throw new Error('Die Planung wurde gewechselt.');
+        store.aendernStill(pp => { pp.route.plaetze = structuredClone(zwischen); });
+        pausenAktualisieren();
+      }
+    });
+    if (!gleiche()) { meldung('Die Planung hat sich geändert – Zwischenstand verworfen.', 'fehler'); return; }
+    pausenAktualisieren();
+    const offen = offenePlaetze(stand);
+    meldung(`${stand.liste.length} Plätze gefunden` + (offen ? ` – ${offen} Streckenstück(e) noch offen (Server überlastet); „Plätze suchen“ holt nur diese nach` : ''), offen ? 'fehler' : '');
+  } catch (err) {
+    meldung(`Die Platzsuche ist fehlgeschlagen: ${err.message}.` + (offenePlaetze(store.aktuell().route.plaetze) ? ' Bisher Gefundenes bleibt gespeichert – erneut suchen setzt fort.' : ''), 'fehler');
+  } finally {
+    platzlauf = false;
+  }
 }
 
 /* ---- Kolonnen ---- */
@@ -434,6 +548,7 @@ function nachRoute(p) {
         store.aendern(pp => { kpAnTrackSetzen(pp, id, lage); });
         routeAktualisieren();
       },
+      beiPlatz(platz, typ) { platzNehmen(platz.id, typ); },
       beiKpSetzen(km) {
         store.aendern(pp => { kpHinzufuegen(pp, km, 'kp'); });
         routeAktualisieren();
@@ -528,6 +643,7 @@ function abgeleitetAktualisieren() {
   const p = store.aktuell();
 
   if (ansicht === 'route') {
+    pausenAktualisieren();
     const fp = fahrplan(p, p.kolonnen[0] ?? null);
     for (const z of fp.zeilen) {
       const zelle = editor.querySelector(`[data-an="${z.kp.id}"]`);
@@ -669,6 +785,8 @@ const AKTIONEN = {
 
   'orte-ermitteln'() { orteErmitteln(); },
   strassenarten() { strassenartenErmitteln(); },
+  'plaetze-suchen'() { plaetzeSuchen(); },
+  'platz-nehmen'(el) { platzNehmen(el.dataset.id, el.dataset.typ); },
 
   'k-neu'() {
     store.aendern(p => {

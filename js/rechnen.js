@@ -161,6 +161,8 @@ export function fahrplan(projekt, kolonne) {
   let haltSumme = 0;               // Halte vor diesem Punkt
   let abfahrt = 0;                 // Abfahrt am vorigen Punkt, Minuten seit Ablauf
   let fahrRund = 0;                // gerundete reine Fahrminuten
+  let rueckVorher = (kps[0]?.umwegKm || 0) / 2;   // Rückfahrt vom vorigen Platz zur Strecke (km)
+  let zusatzSumme = 0;             // alle Umweg-km bisher (für die Kilometeranzeige)
   let vorigerKm = kps.length ? kps[0].km : 0;
   const hinweise = [];
 
@@ -192,14 +194,22 @@ export function fahrplan(projekt, kolonne) {
           hinweise.push(`Keine Marschgeschwindigkeit für ${KLASSE_KURZ[klasse]} – Abschnitt nach „${kp.ort || 'Punkt ' + (i + 1)}“ ohne Zeit.`);
         }
       }
+      // Umweg zu Plätzen abseits der Strecke: Zufahrt zum Platz am Punkt, Rückfahrt
+      // vom vorigen Platz – gefahren wird mit der Geschwindigkeit innerorts.
+      const hin = (kp.umwegKm || 0) / 2;
+      const extraKm = rueckVorher + hin;
+      const streckeTrack = strecke;
+      fm += wegZeitMin(extraKm, par.v.ort);
+      zusatzSumme += extraKm;
+      rueckVorher = hin;
       fahrExakt += fm;
       t = Math.max(abfahrt, Math.round(fahrExakt + haltSumme));
       const fahrt = t - abfahrt;
       fahrRund += fahrt;
       const laengeM = kolonne ? kolonnenLaenge(par, kolonne, klasse) : 0;
       leg = {
-        klasse, v, strecke, fahrMin: fahrt, anteile, strasse,
-        auto: !!auto, gemischt: !!auto && strecke > 0 && anteile[klasse] < strecke * 0.85,
+        klasse, v, strecke: streckeTrack + extraKm, umwegKm: extraKm, fahrMin: fahrt, anteile, strasse,
+        auto: !!auto, gemischt: !!auto && streckeTrack > 0 && anteile[klasse] < streckeTrack * 0.85,
         laengeM, durchMin: durchlaufMin(laengeM, v),
         abstand: par.abstand[klasse]
       };
@@ -209,7 +219,7 @@ export function fahrplan(projekt, kolonne) {
     abfahrt = t + halt;
     zeilen.push({
       nr: i + 1, kp, leg,
-      km: kp.km - (kps[0]?.km ?? 0),
+      km: kp.km - (kps[0]?.km ?? 0) + zusatzSumme,
       zeitGesamt: t, fahrGesamt: fahrRund, halt,
       an: start + t, ab: start + abfahrt
     });

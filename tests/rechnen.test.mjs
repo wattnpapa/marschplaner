@@ -158,3 +158,17 @@ test('Fehlende Geschwindigkeit wird gemeldet statt NaN', () => {
   assert.equal(fp.hinweise.length, 1);
   assert.ok(Number.isFinite(fp.zeilen[1].an));
 });
+
+test('Umweg zu einem Platz abseits: Zufahrt im Abschnitt davor, Rückfahrt im Abschnitt danach', () => {
+  const p = projekt();
+  p.route.kontrollpunkte[1].umwegKm = 2;                          // 1 km hin, 1 km zurück
+  const fp = fahrplan(p, p.kolonnen[0]);
+  const [, b, c] = fp.zeilen;
+  assert.equal(b.leg.umwegKm, 1);
+  assert.equal(b.leg.strecke, 51);                               // 50 km Strecke + 1 km Zufahrt
+  assert.equal(b.leg.fahrMin, 52);                               // 50 min auf der BAB + 2 min innerorts (30 km/h)
+  assert.equal(c.leg.strecke, 31);                               // 30 km + 1 km Rückfahrt
+  assert.equal(c.leg.fahrMin, 38);
+  assert.equal(c.km, 82);                                        // Kilometeranzeige enthält beide Umwegteile
+  assert.equal(fp.kmGesamt, 82);
+});

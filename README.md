@@ -21,6 +21,15 @@ keine Cookies; Planungen liegen im `localStorage` des Browsers und lassen sich a
   Höchstgeschwindigkeit geschlossen – ein Vorschlag, den die Planerin prüft.
 - **Karte** mit Abschnitten nach Straßenart (BAB / BuL / Ort); Kontrollpunkte lassen
   sich entlang der Strecke ziehen, ein Klick auf die Strecke setzt neue.
+- **Pausen und Rastplätze vorschlagen:** Im Suchradius X um die Strecke (100 m bis 10 km) sucht der
+  Marschplaner Rastplätze/Raststätten, Parkplätze und Tankstellen in OpenStreetMap. Für jede Pause
+  (alle N Minuten reiner Fahrzeit, Zeitfenster ±M) schlägt er den besten Platz vor – bewertet nach
+  Art, Stellplätzen (Mindestzahl einstellbar), WC, Lkw-Eignung, Abstand zur Strecke und Zeitnähe.
+  Ein Klick übernimmt den Platz als Rast, Technischen Halt oder Tankstopp. Liegt er abseits, steht
+  die Zu-/Abfahrt als Umweg am Kontrollpunkt (Luftlinie × 1,3, hin und zurück) und geht in Kilometer
+  und Zeit der Marschtabelle ein; auf der Karte erscheint sie gestrichelt. Die Suche läuft stückweise
+  und setzt nach einem Ausfall nur an den fehlenden Stücken fort. Eine echte Neuberechnung der Route
+  gibt es nicht – das Umwegmaß ist eine Schätzung, die sich am Punkt von Hand ändern lässt.
 - **Rechnung** je Marschkolonne: Fahrzeit nach Straßenart, Halte, Uhrzeiten,
   Marschlänge, Durchlaufzeit. Versatz zwischen Kolonnen; Prüfung auf zeitgleiche Halte.
 - **Blätter** (je A4, hoch oder quer, im Browser als PDF speicherbar):

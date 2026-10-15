@@ -121,6 +121,7 @@ function marschtabelleBlatt(p, kolonne) {
     const typ = (kp.typ === 'kp' || kp.typ === 'ablauf') ? (kp.typ === 'ablauf' ? TYP_NAME.ablauf : '') : TYP_NAME[kp.typ];
     const bem = [];
     if (z.halt > 0) bem.push(`Halt ${zahl(z.halt, 0)} min, Abfahrt ${zeitText(z.ab)}`);
+    if (kp.umwegKm > 0) bem.push(`Zu-/Abfahrt ca. ${zahl(kp.umwegKm, 1)} km abseits der Strecke`);
     if (kp.bemerkung) bem.push(kp.bemerkung);
     zeilen += `<tr class="punkt">
       <td class="uhr">${zeitText(z.an)}${z.halt > 0 ? `<small>ab ${zeitText(z.ab)}</small>` : ''}</td>
@@ -279,6 +280,7 @@ function marschskizze(p) {
     if (z.leg) hinw.push(`${e(z.leg.strasse || '')} (${e(artText(z.leg))}), ${zahl(z.leg.strecke, 1)} km`);
     if (z.kp.typ !== 'kp') hinw.push(`<strong>${e(TYP_NAME[z.kp.typ])}</strong>${z.halt > 0 ? `, ${zahl(z.halt, 0)} min` : ''}`);
     else if (z.halt > 0) hinw.push(`Halt ${zahl(z.halt, 0)} min`);
+    if (z.kp.umwegKm > 0) hinw.push(`Zu-/Abfahrt ca. ${zahl(z.kp.umwegKm, 1)} km abseits`);
     if (z.kp.bemerkung) hinw.push(e(z.kp.bemerkung));
     return `<tr>
       <td class="nr">${z.nr}</td>

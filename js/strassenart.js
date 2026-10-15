@@ -32,23 +32,27 @@ const M_PRO_GRAD = 111195;
 export const ZEICHEN = { bab: 'b', bul: 'l', ort: 'o' };
 const KLASSE = { b: 'bab', l: 'bul', o: 'ort' };
 
+/** Koordinatenliste "lat,lon,lat,lon,…" für `around:` – so grob, dass die Abfrage leicht bleibt */
+export function polylinie(track, maxPunkte = 300) {
+  let toleranz = 25, grob = vereinfachen(track, toleranz);
+  while (grob.length > maxPunkte && toleranz < 400) { toleranz *= 2; grob = vereinfachen(track, toleranz); }
+  return grob.map(p => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(',');
+}
+
 /** Overpass-Abfrage für alle Straßen im Umkreis des Tracks */
 export function abfrage(track, radiusM = 30) {
-  let toleranz = 25, grob = vereinfachen(track, toleranz);
-  while (grob.length > 300 && toleranz < 400) { toleranz *= 2; grob = vereinfachen(track, toleranz); }
-  const koord = grob.map(p => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(',');
-  return `[out:json][timeout:25][maxsize:50000000];way["highway"~"^(${STRASSEN})$"](around:${radiusM},${koord});out tags geom;`;
+  return `[out:json][timeout:25][maxsize:50000000];way["highway"~"^(${STRASSEN})$"](around:${radiusM},${polylinie(track)});out tags geom;`;
 }
 
 /**
- * Ruft Overpass ab und gibt die Wege mit Geometrie zurück. Die öffentlichen
+ * Schickt eine Overpass-Abfrage ab und gibt die Elemente zurück. Die öffentlichen
  * Server begrenzen Anfragen je IP (429 „rate_limited“), sind zeitweise überlastet
  * (504) oder liefern eine Fehlerseite statt JSON. Bei 429 wird geduldig gewartet,
  * sonst wechseln sich beide Server ab.
  * @param {(sek:number, grund:string)=>void} [warte] meldet, dass gewartet wird
  */
-export async function ladeWege(track, warte = () => {}, { versuche = 7, tempo = 1 } = {}) {
-  const daten = 'data=' + encodeURIComponent(abfrage(track));
+export async function ladeElemente(abfrageText, warte = () => {}, { versuche = 7, tempo = 1 } = {}) {
+  const daten = 'data=' + encodeURIComponent(abfrageText);
   let letzter = null;
   for (let versuch = 0; versuch < versuche; versuch++) {
     const url = OVERPASS_URLS[versuch % OVERPASS_URLS.length];
@@ -66,13 +70,19 @@ export async function ladeWege(track, warte = () => {}, { versuche = 7, tempo = 
         if (/rate_limited/.test(text)) { pause = 15; throw new Error(`${new URL(url).host}: Anfragekontingent erschöpft`); }
         throw new Error(`${new URL(url).host} lieferte keine Daten (überlastet?)`);
       }
-      return (json.elements || []).filter(x => x.type === 'way' && Array.isArray(x.geometry) && x.geometry.length > 1);
+      return json.elements || [];
     } catch (err) {
       letzter = err.name === 'TimeoutError' ? new Error(`${new URL(url).host} antwortet nicht`) : err;
       if (versuch < versuche - 1) { warte(pause, letzter.message); await new Promise(res => setTimeout(res, pause * 1000 * tempo)); }
     }
   }
   throw letzter || new Error('Overpass nicht erreichbar.');
+}
+
+/** Straßen mit Geometrie im Umkreis des Tracks */
+export async function ladeWege(track, warte = () => {}, opt = {}) {
+  const el = await ladeElemente(abfrage(track), warte, opt);
+  return el.filter(x => x.type === 'way' && Array.isArray(x.geometry) && x.geometry.length > 1);
 }
 
 function hoechstgeschwindigkeit(tags) {

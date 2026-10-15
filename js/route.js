@@ -8,6 +8,7 @@
 import { neuerKp } from './daten.js';
 import { naechsterKm, punktBeiKm, trackLaengeM, vereinfachen, runden } from './geo.js';
 import { sortierteKp } from './rechnen.js';
+import { umwegKm } from './plaetze.js';
 
 const GLEICH_M = 60;        // Wegpunkte näher als das gelten als derselbe Punkt
 const RAND_KM = 0.35;       // Wegpunkt so nah am Trackende ist Ablauf- bzw. Zielpunkt
@@ -68,6 +69,7 @@ export function routeAusGpx(p, gpx, { toleranzM = 6 } = {}) {
   p.route.quelle = 'gpx';
   p.route.kontrollpunkte = kps;
   p.route.arten = null;                       // gehört zum alten Track
+  p.route.plaetze = null;
   if (!p.kopf.von && kps[0].ort) p.kopf.von = kps[0].ort;
   if (!p.kopf.nach && kps[kps.length - 1].ort) p.kopf.nach = kps[kps.length - 1].ort;
   return { laengeKm: laenge, punkte: kps.length, verworfen };
@@ -98,6 +100,8 @@ export function kpAnTrackSetzen(p, id, lage) {
   const r = naechsterKm(p.route.track, lage);
   if (!kp || !r) return null;
   kp.km = r.km;
+  kp.abseits = null;                       // ein verschobener Punkt liegt wieder auf der Strecke
+  kp.umwegKm = 0;
   kpOrdnen(p);
   return kp;
 }
@@ -107,6 +111,7 @@ export function routeLoeschen(p) {
   p.route.name = '';
   p.route.quelle = '';
   p.route.arten = null;
+  p.route.plaetze = null;
   p.route.kontrollpunkte = [];
 }
 
@@ -114,4 +119,22 @@ export function routeLoeschen(p) {
 export function artenUebernehmen(p, arten) {
   p.route.arten = arten;
   for (const kp of p.route.kontrollpunkte) kp.klasse = 'auto';
+}
+
+const PLATZ_STANDARD = { rast: 'Rastplatz', tank: 'Tankstelle', parkplatz: 'Parkplatz' };
+
+/**
+ * Übernimmt einen gefundenen Platz als Kontrollpunkt. Liegt er abseits der
+ * Strecke, merkt sich der Punkt Lage und Umweg; der Fahrplan rechnet ihn mit.
+ */
+export function kpAusPlatz(p, platz, typ = 'rast') {
+  const bem = [platz.kapazitaet ? `${platz.kapazitaet} Stellplätze` : '', platz.lkw ? 'Lkw geeignet' : '', platz.wc ? 'WC' : '']
+    .filter(Boolean).join(', ');
+  const abseits = platz.abstandM >= 50 ? { lat: platz.lat, lon: platz.lon, m: platz.abstandM } : null;
+  return kpHinzufuegen(p, platz.km, typ, {
+    ort: platz.name || PLATZ_STANDARD[platz.art] || 'Platz',
+    bemerkung: bem,
+    abseits,
+    umwegKm: abseits ? umwegKm(platz.abstandM) : 0
+  });
 }
