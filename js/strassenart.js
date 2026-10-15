@@ -47,10 +47,10 @@ export function abfrage(track, radiusM = 30) {
  * sonst wechseln sich beide Server ab.
  * @param {(sek:number, grund:string)=>void} [warte] meldet, dass gewartet wird
  */
-export async function ladeWege(track, warte = () => {}) {
+export async function ladeWege(track, warte = () => {}, { versuche = 7, tempo = 1 } = {}) {
   const daten = 'data=' + encodeURIComponent(abfrage(track));
   let letzter = null;
-  for (let versuch = 0; versuch < 7; versuch++) {
+  for (let versuch = 0; versuch < versuche; versuch++) {
     const url = OVERPASS_URLS[versuch % OVERPASS_URLS.length];
     let pause = 2 * (versuch + 1);
     try {
@@ -69,7 +69,7 @@ export async function ladeWege(track, warte = () => {}) {
       return (json.elements || []).filter(x => x.type === 'way' && Array.isArray(x.geometry) && x.geometry.length > 1);
     } catch (err) {
       letzter = err.name === 'TimeoutError' ? new Error(`${new URL(url).host} antwortet nicht`) : err;
-      if (versuch < 6) { warte(pause, letzter.message); await new Promise(res => setTimeout(res, pause * 1000)); }
+      if (versuch < versuche - 1) { warte(pause, letzter.message); await new Promise(res => setTimeout(res, pause * 1000 * tempo)); }
     }
   }
   throw letzter || new Error('Overpass nicht erreichbar.');
@@ -162,53 +162,85 @@ export function abtasten(track, wege, vonKm = 0, bisKm = trackLaengeM(track) / 1
   return aus;
 }
 
-/** Verdichtet Abtastpunkte zum gespeicherten Profil */
-export function baueArten(proben, laengeKm) {
+/**
+ * Leeres Profil für eine Strecke. `fertig` merkt sich je Streckenstück, ob es
+ * schon abgefragt ist – so setzt ein neuer Lauf nach Abbruch dort fort.
+ */
+export function leereArten(laengeKm) {
   const n = Math.ceil(laengeKm / SCHRITT_KM - 1e-9);
-  const k = new Array(n).fill('x');
-  const r = new Array(n).fill(-1);
-  const tab = [];
+  return {
+    schritt: SCHRITT_KM, k: 'x'.repeat(n), tab: [], r: new Array(n).fill(-1),
+    laenge: Math.round(laengeKm * 1000) / 1000, stueckKm: STUECK_KM,
+    fertig: new Array(Math.max(1, Math.ceil(laengeKm / STUECK_KM))).fill(false), luecken: 0
+  };
+}
+
+/** Trägt Abtastpunkte in das Profil ein (verändert `arten`) */
+export function schreibeProben(arten, proben) {
+  const k = arten.k.split('');
   for (const q of proben) {
-    if (q.i < 0 || q.i >= n) continue;
+    if (q.i < 0 || q.i >= k.length) continue;
     k[q.i] = q.klasse ? ZEICHEN[q.klasse] : 'x';
     if (q.label) {
-      let j = tab.indexOf(q.label);
-      if (j < 0) { tab.push(q.label); j = tab.length - 1; }
-      r[q.i] = j;
+      let j = arten.tab.indexOf(q.label);
+      if (j < 0) { arten.tab.push(q.label); j = arten.tab.length - 1; }
+      arten.r[q.i] = j;
     }
   }
-  return { schritt: SCHRITT_KM, k: k.join(''), tab, r };
+  arten.k = k.join('');
+  return arten;
+}
+
+/** Verdichtet Abtastpunkte zum gespeicherten Profil */
+export function baueArten(proben, laengeKm) {
+  return schreibeProben(leereArten(laengeKm), proben);
+}
+
+/** Wie viele Streckenstücke noch nicht abgefragt sind (ohne Merker: 0) */
+export function offeneStuecke(arten) {
+  return arten?.fertig ? arten.fertig.filter(x => !x).length : 0;
+}
+
+/** Gehört das gespeicherte Profil zu diesem Track? */
+export function passtZu(arten, laengeKm) {
+  return !!arten?.fertig && Math.abs(arten.laenge - laengeKm) < 0.01 && arten.stueckKm === STUECK_KM;
 }
 
 /**
- * Fragt die ganze Route ab, in Stücken, damit auch lange Strecken gehen.
- * @param {(fertig:number, gesamt:number)=>void} [fortschritt]
+ * Fragt die Route stückweise ab. Bereits fertige Stücke eines passenden
+ * Profils (`vorhanden`) werden übersprungen; nach jedem Stück ruft
+ * `beiStueck(arten)` auf, damit der Aufrufer den Stand sichert.
+ * @param {{fortschritt?:Function, vorhanden?:object, beiStueck?:Function, versuche?:number, tempo?:number}} [opt]
  */
-export async function analysiere(track, fortschritt = () => {}) {
-  let hinweis = '';
+export async function analysiere(track, opt = {}) {
+  const { fortschritt = () => {}, vorhanden = null, beiStueck = () => {}, versuche, tempo = 1 } = opt;
   const laenge = trackLaengeM(track) / 1000;
-  const stuecke = Math.max(1, Math.ceil(laenge / STUECK_KM));
-  const proben = [];
-  let luecken = 0, letzterFehler = null;
+  const arten = passtZu(vorhanden, laenge) ? structuredClone(vorhanden) : leereArten(laenge);
+  const stuecke = arten.fertig.length;
+  let hinweis = '', letzterFehler = null, geholt = 0;
   for (let s = 0; s < stuecke; s++) {
+    if (arten.fertig[s]) continue;                       // schon vorhanden – nicht noch einmal fragen
     fortschritt(s, stuecke, hinweis);
     hinweis = '';
     const von = s * STUECK_KM, bis = Math.min(laenge, (s + 1) * STUECK_KM);
     const sub = teilTrack(track, Math.max(0, von - 0.1), Math.min(laenge, bis + 0.1));
-    if (sub.length < 2) continue;
+    if (sub.length < 2) { arten.fertig[s] = true; continue; }
     try {
-      const wege = await ladeWege(sub, (sek, grund) => fortschritt(s, stuecke, `${grund} – neuer Versuch in ${sek} s`));
-      proben.push(...abtasten(track, wege, von, bis));
-    } catch (err) {                                  // ein Stück darf fehlen, der Rest zählt
-      luecken++;
+      const wege = await ladeWege(sub, (sek, grund) => fortschritt(s, stuecke, `${grund} – neuer Versuch in ${sek} s`), { versuche, tempo });
+      schreibeProben(arten, abtasten(track, wege, von, bis));
+      arten.fertig[s] = true;
+      arten.luecken = offeneStuecke(arten);
+      geholt++;
+      beiStueck(arten);
+    } catch (err) {                                      // ein Stück darf fehlen, der Rest zählt
       letzterFehler = err;
+      arten.luecken = offeneStuecke(arten);
     }
-    if (s < stuecke - 1) await new Promise(r => setTimeout(r, PAUSE_MS));  // Kontingent je IP schonen
+    if (s < stuecke - 1) await new Promise(r => setTimeout(r, PAUSE_MS * tempo));
   }
   fortschritt(stuecke, stuecke);
-  if (luecken === stuecke && letzterFehler) throw letzterFehler;
-  const arten = baueArten(proben, laenge);
-  arten.luecken = luecken;
+  arten.luecken = offeneStuecke(arten);
+  if (arten.luecken > 0 && geholt === 0 && letzterFehler) throw letzterFehler;
   return arten;
 }
 

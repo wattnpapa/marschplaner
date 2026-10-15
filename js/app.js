@@ -25,7 +25,7 @@ import {
 import { karteErzeugen } from './karte.js';
 import { drucken, pdfName } from './druck.js';
 import { beispielFuellen } from './beispiel.js';
-import { analysiere, anteileImAbschnitt } from './strassenart.js';
+import { analysiere, anteileImAbschnitt, offeneStuecke, passtZu } from './strassenart.js';
 
 const $ = (sel) => document.querySelector(sel);
 const editor = $('#editor');
@@ -537,7 +537,7 @@ function abgeleitetAktualisieren() {
     if (info) {
       const hat = p.route.track.length > 1;
       info.innerHTML = hat
-        ? `<strong>${e(p.route.name || 'Route')}</strong> · Track ${zahl(trackKm(p.route), 1)} km · ${p.route.track.length} Stützpunkte · ${p.route.kontrollpunkte.length} Kontrollpunkte${p.route.arten ? ' · Straßenarten aus OSM' : ''}${fp.zeilen.length > 1 ? ` · Marschzeit ${dauerText(fp.ende - fp.start)}` : ''}`
+        ? `<strong>${e(p.route.name || 'Route')}</strong> · Track ${zahl(trackKm(p.route), 1)} km · ${p.route.track.length} Stützpunkte · ${p.route.kontrollpunkte.length} Kontrollpunkte${p.route.arten ? (offeneStuecke(p.route.arten) ? ` · Straßenarten teilweise (${offeneStuecke(p.route.arten)} Stück(e) offen)` : ' · Straßenarten aus OSM') : ''}${fp.zeilen.length > 1 ? ` · Marschzeit ${dauerText(fp.ende - fp.start)}` : ''}`
         : `Kein Streckenverlauf geladen${p.route.kontrollpunkte.length ? ` · ${p.route.kontrollpunkte.length} Kontrollpunkte von Hand` : ''}.`;
     }
   }
@@ -864,28 +864,56 @@ async function strassenartenErmitteln({ automatisch = false } = {}) {
   if (artenlauf) return;
   const p = store.aktuell();
   if (p.route.track.length < 2) { meldung('Zuerst eine Route laden.', 'fehler'); return; }
+
+  // Was schon abgefragt ist, bleibt gespeichert: ein neuer Lauf holt nur die Lücken.
+  const laenge = trackKm(p.route);
+  let vorhanden = passtZu(p.route.arten, laenge) ? p.route.arten : null;
+  if (vorhanden && !offeneStuecke(vorhanden)) {
+    if (!confirm('Alle Streckenstücke sind bereits ermittelt. Trotzdem alles neu bei OpenStreetMap abfragen?')) return;
+    vorhanden = null;
+  }
+
   if (erinnern('mp.overpass') !== 'ja') {
     const ok = confirm('Straßenarten erkennen?\n\nDazu wird der Streckenverlauf (vereinfacht) in Stücken an Overpass (overpass-api.de, OpenStreetMap) gesendet, um die Straßen entlang der Route abzufragen. Die Zustimmung wird in diesem Browser gemerkt.\n\nOhne Zustimmung rechnet der Marschplaner alle Abschnitte als Bundes-/Landstraße; die Straßenart lässt sich dann von Hand setzen.');
     if (!ok) { if (automatisch) meldung('Straßenarten nicht ermittelt – alle Abschnitte gelten als Bundes-/Landstraße.'); return; }
     merken('mp.overpass', 'ja');
   }
+
   artenlauf = true;
   const id = p.id, track = p.route.track;
+  const gleichePlanung = () => { const j = store.aktuell(); return j.id === id && j.route.track === track; };
   try {
-    const arten = await analysiere(track, (fertig, gesamt, hinweis) =>
-      meldung(fertig < gesamt ? `Straßenarten werden bei OpenStreetMap abgefragt … ${fertig + 1} von ${gesamt}${hinweis ? ' (' + hinweis + ')' : ''}` : 'Straßenarten werden ausgewertet …', '', true));
-    const jetzt = store.aktuell();
-    if (jetzt.id !== id || jetzt.route.track !== track) { meldung('Die Planung hat sich während der Abfrage geändert – Ergebnis verworfen.', 'fehler'); return; }
-    store.aendern(pp => artenUebernehmen(pp, arten));
+    const arten = await analysiere(track, {
+      vorhanden,
+      fortschritt: (fertig, gesamt, hinweis) => {
+        const offen = vorhanden ? ` (nur fehlende Stücke)` : '';
+        meldung(fertig < gesamt
+          ? `Straßenarten werden bei OpenStreetMap abgefragt … Stück ${fertig + 1} von ${gesamt}${offen}${hinweis ? ' – ' + hinweis : ''}`
+          : 'Straßenarten werden ausgewertet …', '', true);
+      },
+      beiStueck: (zwischenstand) => {                       // jedes fertige Stück sofort sichern
+        if (!gleichePlanung()) throw new Error('Die Planung wurde gewechselt.');
+        const neuAngelegt = !passtZu(store.aktuell().route.arten, laenge);
+        store.aendernStill(pp => {
+          pp.route.arten = structuredClone(zwischenstand);
+          if (neuAngelegt) artenUebernehmen(pp, pp.route.arten);
+        });
+        if (ansicht === 'route') { routeAktualisieren(); }
+      }
+    });
+    if (!gleichePlanung()) { meldung('Die Planung hat sich während der Abfrage geändert – Zwischenstand verworfen.', 'fehler'); return; }
     if (ansicht === 'route') { routeAktualisieren(); renderNav(); }
-    const km = trackKm(jetzt.route);
+    const km = trackKm(store.aktuell().route);
     const a = anteileImAbschnitt(arten, 0, km);
-    const bekannt = km - a.unbekannt;
-    meldung(`Straßenarten erkannt: BAB ${zahl(a.anteile.bab, 0)} km · BuL ${zahl(a.anteile.bul, 0)} km · Ort ${zahl(a.anteile.ort, 0)} km`
-      + (arten.luecken ? ` – ${arten.luecken} Streckenstück(e) konnte(n) nicht abgefragt werden (Server überlastet); „Straßenarten neu ermitteln“ später wiederholen` : '')
-      + (a.unbekannt > km * 0.1 ? ` – für ${zahl(a.unbekannt, 0)} km fand OSM keine Straße nahe der Route (zählt als BuL)` : ''), a.unbekannt > km * 0.1 || bekannt <= 0 || arten.luecken ? 'fehler' : '');
+    const offen = offeneStuecke(arten);
+    const text = `Straßenarten: BAB ${zahl(a.anteile.bab, 0)} km · BuL ${zahl(a.anteile.bul, 0)} km · Ort ${zahl(a.anteile.ort, 0)} km`
+      + (offen ? ` – ${offen} von ${arten.fertig.length} Streckenstücken noch offen (Server überlastet); „Straßenarten neu ermitteln“ holt nur diese nach` : '')
+      + (!offen && a.unbekannt > km * 0.1 ? ` – für ${zahl(a.unbekannt, 0)} km fand OSM keine Straße nahe der Route (zählt als BuL)` : '');
+    meldung(text, offen || a.unbekannt > km * 0.1 ? 'fehler' : '');
   } catch (err) {
-    meldung(`Straßenarten konnten nicht abgefragt werden: ${err.message} – die Abschnitte gelten bis dahin als Bundes-/Landstraße.`, 'fehler');
+    const offen = offeneStuecke(store.aktuell().route.arten);
+    meldung(`Straßenarten konnten nicht abgefragt werden: ${err.message}.` + (offen
+      ? ` Bisher Ermitteltes bleibt gespeichert – „Straßenarten neu ermitteln“ setzt fort.` : ' Die Abschnitte gelten bis dahin als Bundes-/Landstraße.'), 'fehler');
   } finally {
     artenlauf = false;
   }

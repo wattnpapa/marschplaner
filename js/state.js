@@ -132,6 +132,19 @@ export function aendern(fn, schluessel = null) {
   benachrichtigen('projekt');
 }
 
+/**
+ * Wie `aendern`, aber ohne Rückgängig-Schritt: für Zwischenstände, die im
+ * Hintergrund einlaufen (z. B. abgefragte Straßenstücke) und nicht einzeln
+ * zurückgenommen werden sollen.
+ */
+export function aendernStill(fn) {
+  const p = aktuell();
+  fn(p);
+  p.geaendert = new Date().toISOString();
+  speichern();
+  benachrichtigen('projekt');
+}
+
 function stand(json) {
   projekte[aktivId] = migrieren(JSON.parse(json));
   letzteAenderung = { schluessel: null, zeit: 0 };

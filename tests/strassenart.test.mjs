@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  abfrage, klasseVon, referenzen, abtasten, baueArten, anteileImAbschnitt, strasseImAbschnitt, klassenLaeufe
+  analysiere, offeneStuecke, passtZu, leereArten, abfrage, klasseVon, referenzen, abtasten, baueArten, anteileImAbschnitt, strasseImAbschnitt, klassenLaeufe
 } from '../js/strassenart.js';
 import { trackLaengeM } from '../js/geo.js';
 import { fahrplan } from '../js/rechnen.js';
@@ -109,4 +109,65 @@ test('Fahrplan rechnet Abschnitte mit Straßenart „auto“ anteilig', () => {
   p.route.kontrollpunkte[1].klasse = 'auto';
   delete p.route.arten;
   assert.equal(fahrplan(p, p.kolonnen[0]).zeilen[1].leg.auto, false);
+});
+
+/* ---- Fortsetzen nach Timeout: schon Abgefragtes wird nicht noch einmal angefragt ---- */
+
+// 25 km nach Norden → drei Stücke (10 + 10 + 5 km)
+const LANG = [[48.0, 8.0], [48.225, 8.0]];
+const A8 = { type: 'way', tags: { highway: 'motorway', ref: 'A 8' }, geometry: [{ lat: 47.99, lon: 8.0001 }, { lat: 48.24, lon: 8.0001 }] };
+
+function mitFetch(verhalten, fn) {
+  const alt = globalThis.fetch;
+  const aufrufe = [];
+  globalThis.fetch = async (url, opt) => {
+    const nr = aufrufe.push(decodeURIComponent(String(opt.body))) - 1;
+    return verhalten(nr);
+  };
+  return fn(aufrufe).finally(() => { globalThis.fetch = alt; });
+}
+const antwort = (elements) => ({ ok: true, status: 200, text: async () => JSON.stringify({ elements }) });
+const abgelehnt = () => ({ ok: false, status: 504, text: async () => '' });
+
+test('Timeout mitten drin: fertige Stücke bleiben, der nächste Lauf holt nur die Lücke', async () => {
+  const gesichert = [];
+  // Lauf 1: Stück 0 klappt, Stück 1 scheitert (alle Versuche), Stück 2 klappt
+  const erster = await mitFetch(
+    (nr) => (nr === 0 || nr >= 3 ? antwort([A8]) : abgelehnt()),            // Aufruf 1–2 = Stück 1 (2 Versuche)
+    () => analysiere(LANG, { versuche: 2, tempo: 0, beiStueck: a => gesichert.push(structuredClone(a)) })
+  );
+  assert.deepEqual(erster.fertig, [true, false, true]);
+  assert.equal(erster.luecken, 1);
+  assert.equal(offeneStuecke(erster), 1);
+  assert.equal(gesichert.length, 2);                       // nach jedem fertigen Stück gesichert
+  assert.ok(passtZu(erster, trackLaengeM(LANG) / 1000));
+  assert.equal(anteileImAbschnitt(erster, 0, 9).anteile.bab > 8.9, true);
+
+  // Lauf 2 mit dem gespeicherten Stand: genau EINE Anfrage, nur für das fehlende Stück
+  const zweiter = await mitFetch(() => antwort([A8]), async (aufrufe) => {
+    const r = await analysiere(LANG, { vorhanden: erster, versuche: 2, tempo: 0 });
+    assert.equal(aufrufe.length, 1);
+    return r;
+  });
+  assert.deepEqual(zweiter.fertig, [true, true, true]);
+  assert.equal(zweiter.luecken, 0);
+  assert.ok(Math.abs(anteileImAbschnitt(zweiter, 0, 24.9).anteile.bab - 24.9) < 0.2);
+});
+
+test('Ist alles fertig, wird nichts mehr angefragt; ein anderer Track beginnt neu', async () => {
+  const fertig = await mitFetch(() => antwort([A8]), () => analysiere(LANG, { versuche: 1, tempo: 0 }));
+  await mitFetch(() => antwort([A8]), async (aufrufe) => {
+    await analysiere(LANG, { vorhanden: fertig, versuche: 1, tempo: 0 });
+    assert.equal(aufrufe.length, 0);
+  });
+  const kuerzer = [[48.0, 8.0], [48.12, 8.0]];
+  assert.equal(passtZu(fertig, trackLaengeM(kuerzer) / 1000), false);
+});
+
+test('Scheitern alle Stücke, wird der Fehler gemeldet; Teilerfolg nicht', async () => {
+  await assert.rejects(
+    mitFetch(() => abgelehnt(), () => analysiere(LANG, { versuche: 1, tempo: 0 })),
+    /504/
+  );
+  assert.equal(offeneStuecke(leereArten(25)), 3);
 });
