@@ -12,6 +12,7 @@ import {
 } from './rechnen.js';
 import { e } from './html.js';
 import { teilTrack, vereinfachen, punktBeiKm } from './geo.js';
+import { klassenLaeufe } from './strassenart.js';
 import {
   AUFTRAG_ABSCHNITTE, AUFTRAG_AUTO, autoAuftrag, UNTERLAGEN_ROLLEN, HINWEIS_VORLAGE
 } from './daten.js';
@@ -185,17 +186,46 @@ function marschtabelle(p) {
    Fb Fü 54 – Marschskizze
    ==================================================================== */
 
+/* ---------- Skizzen mit Kartenhintergrund ----------
+   Gerechnet wird in Web-Mercator, damit der Linienzug exakt auf den
+   OpenStreetMap-Kacheln liegt, die darunter gelegt werden. */
+
+const KACHELN = 'https://tile.openstreetmap.org';
+
+function mercator(q) {
+  const lat = Math.max(-85, Math.min(85, q[0])) * Math.PI / 180;
+  return [(q[1] + 180) / 360, (1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2];
+}
+
 /** Projektion [lat, lon] → x/y in einer Box, Seitenverhältnis bleibt erhalten */
 function projektion(punkte, w, h, rand) {
-  const lat0 = punkte.reduce((s, q) => s + q[0], 0) / punkte.length;
-  const kx = Math.cos(lat0 * Math.PI / 180);
-  const xy = punkte.map(q => [q[1] * kx, -q[0]]);
-  const xs = xy.map(q => q[0]), ys = xy.map(q => q[1]);
+  const m = punkte.map(mercator);
+  const xs = m.map(q => q[0]), ys = m.map(q => q[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-  const bx = Math.max(maxX - minX, 1e-9), by = Math.max(maxY - minY, 1e-9);
+  const bx = Math.max(maxX - minX, 1e-12), by = Math.max(maxY - minY, 1e-12);
   const s = Math.min((w - 2 * rand) / bx, (h - 2 * rand) / by);
   const ox = (w - bx * s) / 2 - minX * s, oy = (h - by * s) / 2 - minY * s;
-  return (q) => [q[1] * kx * s + ox, -q[0] * s + oy];
+  const f = (q) => { const [x, y] = mercator(q); return [x * s + ox, y * s + oy]; };
+  Object.assign(f, { s, ox, oy, w, h });
+  return f;
+}
+
+/** OSM-Kacheln als <image> unter der Skizze; `dichte` = SVG-Einheiten je Kachel (größer = weniger Kacheln) */
+function kachelnSvg(f, dichte) {
+  let z = Math.min(17, Math.max(2, Math.ceil(Math.log2(f.s / dichte))));
+  for (;;) {
+    const n = 2 ** z, t = f.s / n;
+    const x0 = Math.floor((0 - f.ox) / t), x1 = Math.floor((f.w - f.ox) / t);
+    const y0 = Math.max(0, Math.floor((0 - f.oy) / t)), y1 = Math.min(n - 1, Math.floor((f.h - f.oy) / t));
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 36 && z > 2) { z--; continue; }
+    let aus = '';
+    for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
+      const x = ((tx % n) + n) % n;
+      aus += `<image href="${KACHELN}/${z}/${x}/${ty}.png" x="${(tx * t + f.ox).toFixed(2)}" y="${(ty * t + f.oy).toFixed(2)}" width="${(t + 0.6).toFixed(2)}" height="${(t + 0.6).toFixed(2)}" preserveAspectRatio="none"/>`;
+    }
+    return `<g class="kacheln" opacity="0.62">${aus}</g>
+      <text x="${f.w - 3}" y="${f.h - 3}" text-anchor="end" font-size="6.5" fill="#222" stroke="#fff" stroke-width="2" paint-order="stroke">© OpenStreetMap-Mitwirkende</text>`;
+  }
 }
 
 const pfad = (pts) => pts.map((q, i) => `${i ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
@@ -204,57 +234,72 @@ function pfeilspitze([x, y], [x0, y0], gr = 7) {
   const a = Math.atan2(y - y0, x - x0);
   const p1 = [x - gr * Math.cos(a - 0.45), y - gr * Math.sin(a - 0.45)];
   const p2 = [x - gr * Math.cos(a + 0.45), y - gr * Math.sin(a + 0.45)];
-  return `<path d="M${x.toFixed(1)} ${y.toFixed(1)}L${p1[0].toFixed(1)} ${p1[1].toFixed(1)}L${p2[0].toFixed(1)} ${p2[1].toFixed(1)}Z" fill="#000"/>`;
+  return `<path d="M${x.toFixed(1)} ${y.toFixed(1)}L${p1[0].toFixed(1)} ${p1[1].toFixed(1)}L${p2[0].toFixed(1)} ${p2[1].toFixed(1)}Z" fill="#000" stroke="#fff" stroke-width="1" paint-order="stroke"/>`;
 }
 
-/** Ortsskizze eines Abschnitts: Linienzug mit Start- und Zielmarke */
-function abschnittSkizze(track, vonKm, bisKm) {
+/** Ortsskizze eines Abschnitts: Linienzug auf Kartenhintergrund mit Start- und Zielmarke */
+function abschnittSkizze(track, vonKm, bisKm, mitKarte) {
   const teil = vereinfachen(teilTrack(track, vonKm, bisKm), 8);
   if (teil.length < 2) return '';
   const W = 240, H = 100;
   const f = projektion(teil, W, H, 14);
   const pts = teil.map(f);
   const s = pts[0], z = pts[pts.length - 1], vorz = pts[Math.max(0, pts.length - 2)];
+  const d = pfad(pts);
   return `<svg viewBox="0 0 ${W} ${H}" class="skizze" role="img" aria-label="Ortsskizze">
-    <path d="${pfad(pts)}" fill="none" stroke="#000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+    ${mitKarte ? kachelnSvg(f, 170) : ''}
+    <path d="${d}" fill="none" stroke="#fff" stroke-width="5.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="${d}" fill="none" stroke="#000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="${s[0].toFixed(1)}" cy="${s[1].toFixed(1)}" r="4.5" fill="#fff" stroke="#000" stroke-width="1.6"/>
     ${pfeilspitze(z, vorz, 9)}
   </svg>`;
 }
 
-/** Gesamtübersicht: ganzer Track, Abschnitte nach Straßenart, Punkte nummeriert */
-function uebersichtSkizze(p, fp) {
+/** Gesamtübersicht: ganzer Track auf Karte, Abschnitte nach Straßenart, Punkte nummeriert */
+function uebersichtSkizze(p, fp, mitKarte) {
   const track = p.route.track;
   if (!track || track.length < 2) return '';
   const W = 760, H = 250;
   const ges = vereinfachen(track, 25);
   const f = projektion(ges, W, H, 26);
   const stile = {
-    bab: 'stroke-width="4.2"', bul: 'stroke-width="2.4"', ort: 'stroke-width="2" stroke-dasharray="1 4" stroke-linecap="round"'
+    bab: { breite: 4.2, extra: '' },
+    bul: { breite: 2.4, extra: '' },
+    ort: { breite: 2, extra: 'stroke-dasharray="1 4" stroke-linecap="round"' }
   };
-  const kmStart = sortierteKp(p.route)[0]?.km ?? 0;
-  let linien = '';
+  const arten = p.route.arten;
+  let halo = '', linien = '';
   fp.zeilen.forEach((z, i) => {
     if (!z.leg) return;
-    const vorher = fp.zeilen[i - 1];
-    const teil = vereinfachen(teilTrack(track, vorher.km + kmStart, z.km + kmStart), 25);
-    if (teil.length < 2) return;
-    linien += `<path d="${pfad(teil.map(f))}" fill="none" stroke="#000" stroke-linejoin="round" ${stile[z.leg.klasse] || stile.bul}/>`;
+    const von = fp.zeilen[i - 1].kp.km, bis = z.kp.km;
+    // „auto“-Abschnitte: Straßenart wechselt innerhalb des Abschnitts → in Läufe zerlegen
+    const laeufe = z.leg.auto && arten
+      ? klassenLaeufe(arten, von, bis)
+      : [{ klasse: z.leg.klasse, von, bis }];
+    for (const lauf of laeufe) {
+      const teil = vereinfachen(teilTrack(track, lauf.von, lauf.bis), 25);
+      if (teil.length < 2) continue;
+      const st = stile[lauf.klasse] || stile.bul;
+      const d = pfad(teil.map(f));
+      halo += `<path d="${d}" fill="none" stroke="#fff" stroke-width="${st.breite + 3}" stroke-linejoin="round" stroke-linecap="round"/>`;
+      linien += `<path d="${d}" fill="none" stroke="#000" stroke-width="${st.breite}" stroke-linejoin="round" ${st.extra}/>`;
+    }
   });
   const marken = fp.zeilen.map(z => {
-    const q = punktBeiKm(track, z.km + kmStart);
+    const q = punktBeiKm(track, z.kp.km);
     if (!q) return '';
     const [x, y] = f(q);
     return `<g><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9" fill="#fff" stroke="#000" stroke-width="1.6"/>
       <text x="${x.toFixed(1)}" y="${(y + 3.6).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700">${z.nr}</text></g>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" class="uebersicht" role="img" aria-label="Marschweg">
-    ${linien}${marken}
-    <g font-size="9" transform="translate(${W - 150} ${H - 44})">
-      <rect x="-6" y="-12" width="150" height="46" fill="#fff" stroke="#999"/>
-      <path d="M0 0h28" stroke="#000" stroke-width="4.2"/><text x="36" y="3">Bundesautobahn</text>
-      <path d="M0 14h28" stroke="#000" stroke-width="2.4"/><text x="36" y="17">Bundes-/Landstraße</text>
-      <path d="M0 28h28" stroke="#000" stroke-width="2" stroke-dasharray="1 4" stroke-linecap="round"/><text x="36" y="31">Ortschaft</text>
+    ${mitKarte ? kachelnSvg(f, 210) : ''}
+    ${halo}${linien}${marken}
+    <g font-size="9" transform="translate(12 ${H - 56})">
+      <rect x="-6" y="-12" width="110" height="52" fill="#fff" stroke="#999"/>
+      <path d="M0 0h28" stroke="#000" stroke-width="4.2"/><text x="34" y="3">Autobahn</text>
+      <path d="M0 14h28" stroke="#000" stroke-width="2.4"/><text x="34" y="17">Bundes-/Landstr.</text>
+      <path d="M0 28h28" stroke="#000" stroke-width="2" stroke-dasharray="1 4" stroke-linecap="round"/><text x="34" y="31">Ortschaft</text>
     </g>
   </svg>`;
 }
@@ -274,8 +319,8 @@ function marschskizze(p) {
   const zeilen = fp.zeilen.map((z, i) => {
     const vorher = fp.zeilen[i - 1];
     const skizze = !p.druck.skizzeAuto || !track.length ? '' : (i === 0
-      ? abschnittSkizze(track, kmStart, kmStart + Math.min(1.5, fp.kmGesamt || 1.5))
-      : abschnittSkizze(track, vorher.km + kmStart, z.km + kmStart));
+      ? abschnittSkizze(track, kmStart, kmStart + 1.5, p.druck.kartenHintergrund)
+      : abschnittSkizze(track, vorher.kp.km, z.kp.km, p.druck.kartenHintergrund));
     const hinw = [];
     if (z.leg) hinw.push(`${e(z.leg.strasse || '')} (${e(artText(z.leg))}), ${zahl(z.leg.strecke, 1)} km`);
     if (z.kp.typ !== 'kp') hinw.push(`<strong>${e(TYP_NAME[z.kp.typ])}</strong>${z.halt > 0 ? `, ${zahl(z.halt, 0)} min` : ''}`);
@@ -302,7 +347,7 @@ function marschskizze(p) {
           <th>Marschweg</th><td>${zahl(fp.kmGesamt, 1)} km, ${dauerText(fp.ende - fp.start)}</td></tr>
     </table>
     <h3 class="zwischentitel">Marschweg</h3>
-    ${uebersichtSkizze(p, fp) || '<div class="skizzenfeld gross"></div>'}
+    ${uebersichtSkizze(p, fp, p.druck.kartenHintergrund) || '<div class="skizzenfeld gross"></div>'}
     ${fp.zeilen.length < 2 ? leer('Noch keine Route: Kontrollpunkte unter „Route“ anlegen oder eine GPX-Datei laden.') : `
     <table class="raster tabelle skizzentabelle">
       <colgroup><col class="c-nr"><col class="c-skizze"><col class="c-km"><col class="c-ort"><col class="c-hinw"></colgroup>

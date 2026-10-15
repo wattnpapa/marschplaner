@@ -38,7 +38,7 @@ keine Cookies; Planungen liegen im `localStorage` des Browsers und lassen sich a
   |---|---|
   | Marschauftrag | Fb Fü 55 – leere Felder füllen sich aus der Planung |
   | Marschtabelle | je Kolonne ein Blatt |
-  | Marschskizze | Fb Fü 54 – Ortsskizzen aus dem Streckenverlauf |
+  | Marschskizze | Fb Fü 54 – Ortsskizzen und Übersicht auf OpenStreetMap-Karte |
   | Straßenbelegungsplan | Weg-Zeit-Diagramm, Fahrzeit-Raster, Platzbelegung der Halte |
   | Unterlagenverteilung | Matrix Unterlage × Empfänger |
   | Weg-Zeit-Tabelle | Fb Fü 03 |

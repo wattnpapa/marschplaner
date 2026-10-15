@@ -206,6 +206,6 @@ export function neuesProjekt(name = 'Neue Marschplanung') {
       durchlauf: { vA: 40, vB: 70, fahrzeugLaenge: 7, bisN: 30 }
     },
     suche: { radius: 1000, intervall: 120, fenster: 30, kapazitaet: 0, rast: true, tank: false, parkplatz: true },
-    druck: { skizzeAuto: true }
+    druck: { skizzeAuto: true, kartenHintergrund: true }
   };
 }

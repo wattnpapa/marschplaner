@@ -487,6 +487,9 @@ function vDruck(p) {
       <label class="feld" style="flex-direction:row;align-items:center;gap:10px">
         <input type="checkbox" data-p="druck.skizzeAuto" data-typ="haken" ${p.druck.skizzeAuto ? 'checked' : ''} style="width:18px;height:18px;min-height:0;accent-color:var(--thw)">
         <span>Ortsskizzen der Marschskizze aus dem Streckenverlauf zeichnen <span class="hinweis">(aus = Felder frei, zum Einzeichnen von Hand)</span></span></label>
+      <label class="feld" style="flex-direction:row;align-items:center;gap:10px;margin-top:8px">
+        <input type="checkbox" data-p="druck.kartenHintergrund" data-typ="haken" ${p.druck.kartenHintergrund ? 'checked' : ''} style="width:18px;height:18px;min-height:0;accent-color:var(--thw)">
+        <span>OpenStreetMap-Karte unter die Skizzen legen <span class="hinweis">(lädt Kartenkacheln beim Drucken; aus = nur Linienzug, auch ohne Netz)</span></span></label>
     </section>
     <div class="leiste">
       <button type="button" class="knopf primaer" data-aktion="drucken" id="druck-los">Ausgewählte Blätter drucken / als PDF speichern</button>
@@ -732,7 +735,7 @@ editor.addEventListener('change', ev => {
     return;
   }
   if (el.dataset.neu) render();                                   // Art des Punkts geändert → Vorgaben neu zeigen
-  if (el.dataset.p === 'druck.skizzeAuto') vorschauAktualisieren();
+  if (el.dataset.p === 'druck.skizzeAuto' || el.dataset.p === 'druck.kartenHintergrund') vorschauAktualisieren();
 });
 
 $('#projektname').addEventListener('input', ev => {
@@ -859,13 +862,15 @@ const AKTIONEN = {
   drucken() { drucke(); }
 };
 
-function drucke() {
+async function drucke() {
   const p = store.aktuell();
   const ids = BLAETTER.filter(b => druckAuswahl.has(b.id)).map(b => b.id);
   if (!ids.length) { meldung('Bitte mindestens ein Blatt auswählen.', 'fehler'); return; }
   const probleme = pruefung(p).filter(x => x.stufe === 'fehler');
   if (probleme.length && !confirm(`Die Planung ist noch unvollständig:\n\n• ${probleme.map(x => x.text).join('\n• ')}\n\nTrotzdem drucken?`)) return;
-  drucken(ids, p);
+  if (p.druck.kartenHintergrund && ids.includes('marschskizze')) meldung('Kartenausschnitte werden geladen …', '', true);
+  await drucken(ids, p);
+  $('#toast').className = 'toast';
 }
 
 document.addEventListener('click', ev => {

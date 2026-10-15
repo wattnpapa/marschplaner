@@ -14,7 +14,19 @@ export function pdfName(projekt) {
   return roh.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').slice(0, 80);
 }
 
-export function drucken(ids, projekt) {
+/** Wartet (höchstens 12 s), bis die Kartenkacheln der Skizzen geladen sind – sonst druckt der Browser leere Flächen */
+async function bilderLaden(wurzel) {
+  const urls = [...new Set([...wurzel.querySelectorAll('image')].map(i => i.getAttribute('href')).filter(Boolean))];
+  if (!urls.length) return;
+  const laden = Promise.all(urls.map(u => new Promise(fertig => {
+    const bild = new Image();
+    bild.onload = bild.onerror = fertig;
+    bild.src = u;
+  })));
+  await Promise.race([laden, new Promise(r => setTimeout(r, 12000))]);
+}
+
+export async function drucken(ids, projekt) {
   const gueltig = ids.filter(id => BLATT_NACH_ID[id]);
   if (!gueltig.length) return false;
   const ziel = document.getElementById('druck');
@@ -31,6 +43,7 @@ export function drucken(ids, projekt) {
     ziel.innerHTML = '';
   };
   window.addEventListener('afterprint', zurueck);
+  await bilderLaden(ziel);
   setTimeout(() => window.print(), 80);       // dem Browser einen Takt für das Layout geben
   return true;
 }
