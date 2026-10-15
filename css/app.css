@@ -139,6 +139,8 @@ body.vorschau-aus .vorschau { display: none; }
 .tab tr.warn td { background: var(--warnung-flaeche); }
 
 /* ---- Route ---- */
+.kp-tabelle td.kp-nr, .kp-tabelle th:first-child { position: sticky; left: 0; z-index: 1; background: var(--flaeche); white-space: nowrap; }
+.kp-tabelle td.kp-nr { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--linie); min-height: 44px; }
 .route-info { color: var(--schwach); margin: 0 0 10px; }
 .route-info strong { color: var(--text); }
 #karte { height: 430px; border: 1px solid var(--linie-stark); border-radius: var(--radius); background: #dfe6ee; position: relative; z-index: 0; }

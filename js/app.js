@@ -164,7 +164,8 @@ function kpTabelle(p) {
     const pf = (f) => `route.kontrollpunkte.@${kp.id}.${f}`;
     const vorgabe = p.parameter.halt?.[kp.typ];
     return `<tr data-kp="${kp.id}">
-      <td class="num"><strong>${i + 1}</strong></td>
+      <td class="kp-nr"><strong>${i + 1}</strong>
+        <button type="button" class="knopf klein nur-symbol gefahr" data-aktion="kp-loeschen" data-id="${kp.id}" title="Punkt ${i + 1} entfernen" aria-label="Punkt ${i + 1} entfernen">✕</button></td>
       <td><select data-p="${pf('typ')}" data-typ="text" data-neu="1" aria-label="Art des Punkts ${i + 1}">${kpOptionen(PUNKTTYPEN, kp.typ)}</select></td>
       <td><input type="text" data-p="${pf('ort')}" data-typ="text" value="${e(kp.ort)}" placeholder="Ort" aria-label="Ort ${i + 1}"></td>
       <td><input type="text" data-p="${pf('strasse')}" data-typ="text" value="${e(kp.strasse)}" placeholder="z. B. B 28" ${i === 0 ? 'disabled title="Der Ablaufpunkt hat keinen Abschnitt davor"' : ''} aria-label="Straße bis Punkt ${i + 1}"></td>
@@ -174,11 +175,10 @@ function kpTabelle(p) {
       <td class="num"><input type="number" step="0.1" min="0" data-p="${pf('umwegKm')}" data-typ="zahl" value="${e(kp.umwegKm || '')}" placeholder="0" title="Zusätzliche Strecke für Zu- und Abfahrt zu einem Platz abseits der Strecke (hin und zurück)" aria-label="Umweg in km ${i + 1}"></td>
       <td class="abgeleitet" data-an="${kp.id}"></td>
       <td><input type="text" data-p="${pf('bemerkung')}" data-typ="text" value="${e(kp.bemerkung)}" placeholder="Bemerkung" aria-label="Bemerkung ${i + 1}"></td>
-      <td><button type="button" class="knopf klein nur-symbol gefahr" data-aktion="kp-loeschen" data-id="${kp.id}" title="Punkt entfernen" aria-label="Punkt ${i + 1} entfernen">✕</button></td>
-    </tr>`;
+</tr>`;
   }).join('');
   return `<table class="tab kp-tabelle">
-    <thead><tr><th>Nr</th><th>Art</th><th>Ort</th><th>Straße <span class="hinweis">(bis hierher)</span></th><th>Straßenart</th><th class="num">km</th><th class="num">Halt min</th><th class="num">Umweg km</th><th>Ankunft</th><th>Bemerkung</th><th></th></tr></thead>
+    <thead><tr><th>Nr</th><th>Art</th><th>Ort</th><th>Straße <span class="hinweis">(bis hierher)</span></th><th>Straßenart</th><th class="num">km</th><th class="num">Halt min</th><th class="num">Umweg km</th><th>Ankunft</th><th>Bemerkung</th></tr></thead>
     <tbody>${zeilen}</tbody></table>`;
 }
 
