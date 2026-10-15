@@ -30,6 +30,13 @@ keine Cookies; Planungen liegen im `localStorage` des Browsers und lassen sich a
   und Zeit der Marschtabelle ein; auf der Karte erscheint sie gestrichelt. Die Suche läuft stückweise
   und setzt nach einem Ausfall nur an den fehlenden Stücken fort. Eine echte Neuberechnung der Route
   gibt es nicht – das Umwegmaß ist eine Schätzung, die sich am Punkt von Hand ändern lässt.
+- **Sicher arbeiten:** Löschen von Kontrollpunkten, Kolonnen, Unterlagen und der Route meldet sich mit
+  „Rückgängig“; der Verlauf bleibt je Planung erhalten, auch nach einem Wechsel. Gelöschte Planungen
+  liegen im Papierkorb (die letzten fünf). Ein unlesbarer Speicherstand wird nie überschrieben – der
+  Rohtext wird zur Seite gelegt und lässt sich herunterladen; zwei offene Fenster überschreiben sich
+  nicht gegenseitig. Die Kopfzeile zeigt, wann die Planung zuletzt als Datei gesichert wurde.
+  Abfragen bei OpenStreetMap lassen sich abbrechen; ohne Netz sagt die Oberfläche das dauerhaft
+  (Pausenblock, Routeninfo) und rechnet mit der eingetragenen Straßenart weiter.
 - **Rechnung** je Marschkolonne: Fahrzeit nach Straßenart, Halte, Uhrzeiten,
   Marschlänge, Durchlaufzeit. Versatz zwischen Kolonnen; Prüfung auf zeitgleiche Halte.
 - **Blätter** (je A4, hoch oder quer, im Browser als PDF speicherbar):
@@ -38,7 +45,7 @@ keine Cookies; Planungen liegen im `localStorage` des Browsers und lassen sich a
   |---|---|
   | Marschauftrag | Fb Fü 55 – leere Felder füllen sich aus der Planung |
   | Marschtabelle | je Kolonne ein Blatt |
-  | Marschskizze | Fb Fü 54 – Ortsskizzen und Übersicht auf OpenStreetMap-Karte |
+  | Marschskizze | Fb Fü 54 – Ortsskizzen und Übersicht auf OpenStreetMap-Karte, mit Maßstab, Nordpfeil, Koordinaten (WGS 84) und Kennzeichen für Rast (R), Tanken (T) und Technischen Halt (H), die auch im S/W-Druck tragen |
   | Straßenbelegungsplan | Weg-Zeit-Diagramm, Fahrzeit-Raster, Platzbelegung der Halte |
   | Unterlagenverteilung | Matrix Unterlage × Empfänger |
   | Weg-Zeit-Tabelle | Fb Fü 03 |
@@ -76,7 +83,10 @@ einzelner Kontrollpunkte an `nominatim.openstreetmap.org`, wenn „Ortsnamen erm
 gedrückt wird. Die automatische Straßenerkennung sendet den vereinfachten Streckenverlauf in
 Stücken von 10 km an `overpass-api.de` (Ausweichserver: `overpass.kumi.systems`); der Browser
 fragt dafür einmalig um Zustimmung und merkt sie sich. Ohne Zustimmung gelten alle Abschnitte
-als Bundes-/Landstraße. Die Planung selbst verlässt den Browser nicht.
+als Bundes-/Landstraße. Auch der Kartenhintergrund beim Drucken fragt einmalig um Zustimmung; im Dialog „Planungen“ lassen sich beide Zustimmungen widerrufen.
+Fehlen beim Drucken Kacheln, bietet der Marschplaner an, ohne Karte (nur Linienzug) zu drucken.
+Die Planung selbst verlässt den Browser nicht. Sie lässt sich als `.json` sichern und die Strecke mit
+Punkten als GPX exportieren (z. B. fürs Navigationsgerät).
 
 ## Lizenz
 

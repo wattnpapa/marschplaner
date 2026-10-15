@@ -6,12 +6,12 @@
 // Die Funktionen sind rein: Projekt hinein, Zeichenkette heraus.
 
 import {
-  KLASSEN, KLASSE_KURZ, TYP_NAME, zahl, zeitText, dauerText, sekundenText,
+  KLASSEN, KLASSE_KURZ, TYP_NAME, zahl, zeitText, zeitParse, dauerText, sekundenText,
   sortierteKp, fahrplan, belegung, haltKonflikte, fahrzeitBei, kolonnenLaenge,
   wegZeitTabelle, durchlaufTabelle, marschHilfe
 } from './rechnen.js';
 import { e } from './html.js';
-import { teilTrack, vereinfachen, punktBeiKm } from './geo.js';
+import { teilTrack, vereinfachen, punktBeiKm, meterProMercatorEinheit, schoenerMassstab, laengeText, koordText } from './geo.js';
 import { klassenLaeufe } from './strassenart.js';
 import {
   AUFTRAG_ABSCHNITTE, AUFTRAG_AUTO, autoAuftrag, UNTERLAGEN_ROLLEN, HINWEIS_VORLAGE
@@ -35,8 +35,13 @@ function fuss(p) {
   return `<footer class="blatt-fuss"><div>${e(wer)}</div><div>${e(HINWEIS_VORLAGE)}</div></footer>`;
 }
 
+/** Blätter, auf denen Uhrzeiten stehen: ohne Ablaufzeit wäre jede Zeit „ab 00:00“ gerechnet */
+const ZEITBLAETTER = new Set(['marschtabelle', 'marschskizze', 'belegung']);
+
 function blatt(id, ausrichtung, inhalt, p, klasse = '') {
-  return `<section class="blatt ${ausrichtung} ${klasse}" data-blatt="${id}">${inhalt}${fuss(p)}</section>`;
+  const warnung = ZEITBLAETTER.has(id) && zeitParse(p.kopf.ablaufzeit) === null
+    ? `<p class="leerhinweis">Ablaufzeit fehlt – alle Uhrzeiten auf diesem Blatt sind ab 00:00 gerechnet und nicht verwendbar.</p>` : '';
+  return `<section class="blatt ${ausrichtung} ${klasse}" data-blatt="${id}">${warnung}${inhalt}${fuss(p)}</section>`;
 }
 
 /** „BuL“ bzw. bei gemischten Abschnitten „BuL 70 % · Ort 30 %“ */
@@ -112,6 +117,12 @@ function parameterTabelle(p) {
   </table>`;
 }
 
+/** Hinweis für Blätter, wenn die Straßenarten nicht aus Kartendaten stammen */
+function artenHinweis(p) {
+  if (!(p.route.track?.length > 1) || p.route.arten) return '';
+  return 'Straßenarten nicht aus Kartendaten ermittelt: Es gilt die eingetragene Straßenart (Vorgabe Bundes-/Landstraße), Geschwindigkeit und Abstand folgen ihr.';
+}
+
 function marschtabelleBlatt(p, kolonne) {
   const fp = fahrplan(p, kolonne);
   const fz = (kolonne.einzel || 0) + (kolonne.gespanne || 0);
@@ -173,6 +184,7 @@ function marschtabelleBlatt(p, kolonne) {
         Uhrzeit = Ankunft der Spitze. „Zeit gesamt“ enthält die Halte; „Zeit einzeln“ ist die reine Fahrzeit.
         Marschlänge und Durchlaufzeit gelten für diese Kolonne mit dem Fahrzeugabstand der jeweiligen Straßenart.
         Gesamt: ${zahl(fp.kmGesamt, 1)} km, ${dauerText(fp.ende - fp.start)} (davon Halte ${dauerText(fp.haltMinGesamt)}).
+        ${p.route.track?.length > 1 ? 'Kilometer = Streckenlänge laut Track; zum Tacho sind Abweichungen möglich. ' : ''}${artenHinweis(p)}
       </td></tr></tfoot>
     </table>`}`;
   return blatt('marschtabelle', 'quer', inhalt, p);
@@ -206,26 +218,54 @@ function projektion(punkte, w, h, rand) {
   const s = Math.min((w - 2 * rand) / bx, (h - 2 * rand) / by);
   const ox = (w - bx * s) / 2 - minX * s, oy = (h - by * s) / 2 - minY * s;
   const f = (q) => { const [x, y] = mercator(q); return [x * s + ox, y * s + oy]; };
-  Object.assign(f, { s, ox, oy, w, h });
+  const lat = punkte.reduce((a, q) => a + q[0], 0) / punkte.length;
+  Object.assign(f, { s, ox, oy, w, h, lat });
   return f;
 }
 
-/** OSM-Kacheln als <image> unter der Skizze; `dichte` = SVG-Einheiten je Kachel (größer = weniger Kacheln) */
-function kachelnSvg(f, dichte) {
+/** Kartenstufe, unter der die Kacheln nur noch Länder und Großstädte zeigen – dann lieber gar keine */
+const MIN_KARTENSTUFE = 7;
+
+/**
+ * OSM-Kacheln als <image> unter der Skizze; `dichte` = SVG-Einheiten je Kachel (größer = weniger Kacheln).
+ * Ist die Stufe zu grob, um etwas zu erkennen, bleibt die Karte weg (`zuGrob`).
+ * @returns {{svg:string, stufe:number, zuGrob:boolean}}
+ */
+function kachelnSvg(f, dichte, { quelle = false, schrift = 9 } = {}) {
   let z = Math.min(17, Math.max(2, Math.ceil(Math.log2(f.s / dichte))));
   for (;;) {
     const n = 2 ** z, t = f.s / n;
     const x0 = Math.floor((0 - f.ox) / t), x1 = Math.floor((f.w - f.ox) / t);
     const y0 = Math.max(0, Math.floor((0 - f.oy) / t)), y1 = Math.min(n - 1, Math.floor((f.h - f.oy) / t));
     if ((x1 - x0 + 1) * (y1 - y0 + 1) > 36 && z > 2) { z--; continue; }
+    if (z < MIN_KARTENSTUFE) return { svg: '', stufe: z, zuGrob: true };
     let aus = '';
     for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
       const x = ((tx % n) + n) % n;
       aus += `<image href="${KACHELN}/${z}/${x}/${ty}.png" x="${(tx * t + f.ox).toFixed(2)}" y="${(ty * t + f.oy).toFixed(2)}" width="${(t + 0.6).toFixed(2)}" height="${(t + 0.6).toFixed(2)}" preserveAspectRatio="none"/>`;
     }
-    return `<g class="kacheln" opacity="0.62">${aus}</g>
-      <text x="${f.w - 3}" y="${f.h - 3}" text-anchor="end" font-size="6.5" fill="#222" stroke="#fff" stroke-width="2" paint-order="stroke">© OpenStreetMap-Mitwirkende</text>`;
+    const nennung = quelle
+      ? `<text x="${f.w - 3}" y="${f.h - 3}" text-anchor="end" font-size="${schrift}" fill="#222" stroke="#fff" stroke-width="2.5" paint-order="stroke">© OpenStreetMap-Mitwirkende</text>` : '';
+    return { svg: `<g class="kacheln" opacity="0.62">${aus}</g>${nennung}`, stufe: z, zuGrob: false };
   }
+}
+
+/** Maßstabsbalken (links unten, gilt für die mittlere Breite der Skizze) und Nordpfeil (rechts oben) */
+function massstabUndNorden(f, { schrift = 9, balkenMax = 0.28, x = 8, rechts = null, y = f.h - 8, nordX = f.w - 14, nordY = 8, nordHoehe = 20 } = {}) {
+  const proEinheit = meterProMercatorEinheit(f.lat) / f.s;                 // Meter je SVG-Einheit
+  const meter = schoenerMassstab(f.w * balkenMax * proEinheit);
+  const laenge = meter / proEinheit;
+  if (rechts !== null) x = f.w - rechts - laenge - schrift * 4.4;           // Balken samt Beschriftung rechtsbündig
+  const balken = meter ? `<g>
+      <rect x="${x - 3}" y="${y - schrift - 4}" width="${(laenge + schrift * 4.4).toFixed(1)}" height="${schrift + 9}" fill="#fff" opacity="0.8"/>
+      <path d="M${x} ${y - 3}V${y}H${(x + laenge).toFixed(1)}V${y - 3}" fill="none" stroke="#000" stroke-width="1.4"/>
+      <text x="${(x + laenge + 3).toFixed(1)}" y="${y}" font-size="${schrift}" font-weight="700">${laengeText(meter)}</text></g>` : '';
+  const m = nordX, kopf = nordY, fuss = nordY + nordHoehe;
+  const pfeil = `<g>
+      <rect x="${m - schrift}" y="${kopf - 2}" width="${schrift * 2}" height="${nordHoehe + schrift + 6}" fill="#fff" opacity="0.8"/>
+      <path d="M${m} ${kopf}L${m - schrift * 0.55} ${fuss}L${m} ${fuss - nordHoehe * 0.28}L${m + schrift * 0.55} ${fuss}Z" fill="#000" stroke="#fff" stroke-width="0.6"/>
+      <text x="${m}" y="${fuss + schrift + 1}" text-anchor="middle" font-size="${schrift}" font-weight="700">N</text></g>`;
+  return balken + pfeil;
 }
 
 const pfad = (pts) => pts.map((q, i) => `${i ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
@@ -237,28 +277,46 @@ function pfeilspitze([x, y], [x0, y0], gr = 7) {
   return `<path d="M${x.toFixed(1)} ${y.toFixed(1)}L${p1[0].toFixed(1)} ${p1[1].toFixed(1)}L${p2[0].toFixed(1)} ${p2[1].toFixed(1)}Z" fill="#000" stroke="#fff" stroke-width="1" paint-order="stroke"/>`;
 }
 
-/** Ortsskizze eines Abschnitts: Linienzug auf Kartenhintergrund mit Start- und Zielmarke */
+/** Ortsskizze eines Abschnitts: Linienzug auf Kartenhintergrund mit Start- und Zielmarke, Maßstab und Nordpfeil */
 function abschnittSkizze(track, vonKm, bisKm, mitKarte) {
   const teil = vereinfachen(teilTrack(track, vonKm, bisKm), 8);
-  if (teil.length < 2) return '';
+  if (teil.length < 2) return { svg: '', karte: null };
   const W = 240, H = 100;
   const f = projektion(teil, W, H, 14);
   const pts = teil.map(f);
   const s = pts[0], z = pts[pts.length - 1], vorz = pts[Math.max(0, pts.length - 2)];
   const d = pfad(pts);
-  return `<svg viewBox="0 0 ${W} ${H}" class="skizze" role="img" aria-label="Ortsskizze">
-    ${mitKarte ? kachelnSvg(f, 170) : ''}
+  const karte = mitKarte ? kachelnSvg(f, 170) : null;
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="skizze" role="img" aria-label="Ortsskizze">
+    ${karte?.svg ?? ''}
     <path d="${d}" fill="none" stroke="#fff" stroke-width="5.6" stroke-linejoin="round" stroke-linecap="round"/>
     <path d="${d}" fill="none" stroke="#000" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="${s[0].toFixed(1)}" cy="${s[1].toFixed(1)}" r="4.5" fill="#fff" stroke="#000" stroke-width="1.6"/>
     ${pfeilspitze(z, vorz, 9)}
+    ${massstabUndNorden(f, { schrift: 8, balkenMax: 0.3, x: 6, y: H - 6, nordX: W - 11, nordY: 5, nordHoehe: 15 })}
   </svg>`;
+  return { svg, karte };
+}
+
+/** Kennbuchstabe für Punkte, die auf Papier ohne Farbe unterscheidbar sein müssen */
+const PUNKT_KUERZEL = { rast: 'R', tank: 'T', th: 'H' };
+
+/** Marke eines Kontrollpunkts: Form und Kürzel nach Art, nicht nach Farbe */
+function punktMarke(typ, nr, x, y) {
+  const xs = x.toFixed(1), ys = y.toFixed(1);
+  let form;
+  if (typ === 'ablauf') form = `<rect x="${(x - 9).toFixed(1)}" y="${(y - 9).toFixed(1)}" width="18" height="18" fill="#fff" stroke="#000" stroke-width="1.8"/>`;
+  else if (typ === 'ziel') form = `<circle cx="${xs}" cy="${ys}" r="11" fill="#fff" stroke="#000" stroke-width="1.2"/><circle cx="${xs}" cy="${ys}" r="8" fill="#fff" stroke="#000" stroke-width="1.8"/>`;
+  else form = `<circle cx="${xs}" cy="${ys}" r="9" fill="#fff" stroke="#000" stroke-width="1.6"/>`;
+  const kuerzel = PUNKT_KUERZEL[typ]
+    ? `<rect x="${(x + 6).toFixed(1)}" y="${(y - 15).toFixed(1)}" width="12" height="12" fill="#000"/><text x="${(x + 12).toFixed(1)}" y="${(y - 5.5).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">${PUNKT_KUERZEL[typ]}</text>` : '';
+  return `<g>${form}<text x="${xs}" y="${(y + 3.6).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700">${nr}</text>${kuerzel}</g>`;
 }
 
 /** Gesamtübersicht: ganzer Track auf Karte, Abschnitte nach Straßenart, Punkte nummeriert */
 function uebersichtSkizze(p, fp, mitKarte) {
   const track = p.route.track;
-  if (!track || track.length < 2) return '';
+  if (!track || track.length < 2) return { svg: '', karte: null };
   const W = 760, H = 250;
   const ges = vereinfachen(track, 25);
   const f = projektion(ges, W, H, 26);
@@ -268,6 +326,7 @@ function uebersichtSkizze(p, fp, mitKarte) {
     ort: { breite: 2, extra: 'stroke-dasharray="1 4" stroke-linecap="round"' }
   };
   const arten = p.route.arten;
+  const verwendet = new Set();
   let halo = '', linien = '';
   fp.zeilen.forEach((z, i) => {
     if (!z.leg) return;
@@ -279,7 +338,9 @@ function uebersichtSkizze(p, fp, mitKarte) {
     for (const lauf of laeufe) {
       const teil = vereinfachen(teilTrack(track, lauf.von, lauf.bis), 25);
       if (teil.length < 2) continue;
-      const st = stile[lauf.klasse] || stile.bul;
+      const klasse = stile[lauf.klasse] ? lauf.klasse : 'bul';
+      verwendet.add(klasse);
+      const st = stile[klasse];
       const d = pfad(teil.map(f));
       halo += `<path d="${d}" fill="none" stroke="#fff" stroke-width="${st.breite + 3}" stroke-linejoin="round" stroke-linecap="round"/>`;
       linien += `<path d="${d}" fill="none" stroke="#000" stroke-width="${st.breite}" stroke-linejoin="round" ${st.extra}/>`;
@@ -289,19 +350,46 @@ function uebersichtSkizze(p, fp, mitKarte) {
     const q = punktBeiKm(track, z.kp.km);
     if (!q) return '';
     const [x, y] = f(q);
-    return `<g><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9" fill="#fff" stroke="#000" stroke-width="1.6"/>
-      <text x="${x.toFixed(1)}" y="${(y + 3.6).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700">${z.nr}</text></g>`;
+    return punktMarke(z.kp.typ, z.nr, x, y);
   }).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" class="uebersicht" role="img" aria-label="Marschweg">
-    ${mitKarte ? kachelnSvg(f, 210) : ''}
+
+  const eintraege = [
+    ['bab', 'Autobahn', 4.2, ''], ['bul', 'Bundes-/Landstr.', 2.4, ''],
+    ['ort', 'Ortschaft', 2, 'stroke-dasharray="1 4" stroke-linecap="round"']
+  ].filter(([k]) => verwendet.has(k));
+  const zeichen = [['□', 'Ablauf'], ['◎', 'Ziel'], ['R', 'Rast'], ['T', 'Tanken'], ['H', 'Techn. Halt']]
+    .filter(([, n]) => fp.zeilen.some(z => (z.kp.typ === 'ablauf' && n === 'Ablauf') || (z.kp.typ === 'ziel' && n === 'Ziel')
+      || (z.kp.typ === 'rast' && n === 'Rast') || (z.kp.typ === 'tank' && n === 'Tanken') || (z.kp.typ === 'th' && n === 'Techn. Halt')));
+  const zeilenHoehe = 14, hoehe = 12 + (eintraege.length + (zeichen.length ? 1 : 0)) * zeilenHoehe;
+  const legende = eintraege.length || zeichen.length ? `
+    <g font-size="9" transform="translate(12 ${H - hoehe - 10})">
+      <rect x="-6" y="-12" width="150" height="${hoehe}" fill="#fff" stroke="#999"/>
+      ${eintraege.map(([, name, breite, extra], i) => `<path d="M0 ${i * zeilenHoehe}h28" stroke="#000" stroke-width="${breite}" ${extra}/><text x="34" y="${i * zeilenHoehe + 3}">${name}</text>`).join('')}
+      ${zeichen.length ? `<text x="0" y="${eintraege.length * zeilenHoehe + 3}" font-size="8.5">${zeichen.map(([k, n]) => `${k} ${n}`).join(' · ')}</text>` : ''}
+    </g>` : '';
+
+  const karte = mitKarte ? kachelnSvg(f, 210, { quelle: true, schrift: 9 }) : null;
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="uebersicht" role="img" aria-label="Marschweg">
+    ${karte?.svg ?? ''}
     ${halo}${linien}${marken}
-    <g font-size="9" transform="translate(12 ${H - 56})">
-      <rect x="-6" y="-12" width="110" height="52" fill="#fff" stroke="#999"/>
-      <path d="M0 0h28" stroke="#000" stroke-width="4.2"/><text x="34" y="3">Autobahn</text>
-      <path d="M0 14h28" stroke="#000" stroke-width="2.4"/><text x="34" y="17">Bundes-/Landstr.</text>
-      <path d="M0 28h28" stroke="#000" stroke-width="2" stroke-dasharray="1 4" stroke-linecap="round"/><text x="34" y="31">Ortschaft</text>
-    </g>
+    ${legende}
+    ${massstabUndNorden(f, { schrift: 11, balkenMax: 0.22, rechts: 10, y: H - 24, nordX: W - 18, nordY: 10, nordHoehe: 26 })}
   </svg>`;
+  return { svg, karte };
+}
+
+/** Quellen und Bezugsgrößen, die auf der Skizze stehen müssen, damit man sie richtig liest */
+function fussnoten(p, karten) {
+  const zeilen = [];
+  const mitKarte = karten.filter(k => k && !k.zuGrob);
+  if (mitKarte.length) zeilen.push('Kartengrundlage: © OpenStreetMap-Mitwirkende (openstreetmap.org/copyright). Maßstab und Nordpfeil gelten je Skizze; Norden ist oben.');
+  else zeilen.push('Norden ist oben; der Maßstabsbalken gilt je Skizze.');
+  if (karten.some(k => k?.zuGrob)) zeilen.push('Für mindestens eine Skizze ist die Strecke zu lang für einen lesbaren Kartenhintergrund; er wurde weggelassen.');
+  zeilen.push('km = Streckenlänge laut Track (inkl. Umwege zu Plätzen abseits); zum Tacho sind Abweichungen möglich.');
+  zeilen.push('Koordinaten: WGS 84, Dezimalgrad, aus dem Streckenverlauf berechnet (ca.), bei Plätzen abseits die Lage des Platzes.');
+  const arten = artenHinweis(p);
+  if (arten) zeilen.push(arten);
+  return `<p class="fussnote">${zeilen.map(e).join('<br>')}</p>`;
 }
 
 function marschskizze(p) {
@@ -315,12 +403,17 @@ function marschskizze(p) {
   }).filter(Boolean).join(' · ');
   const auto = autoAuftrag(p);
   const ablaufText = [auto.a3i, p.kopf.ablaufzeit ? `${p.kopf.ablaufzeit} Uhr` : ''].filter(Boolean).join(', ');
+  const uebersicht = uebersichtSkizze(p, fp, p.druck.kartenHintergrund);
 
+  const karten = [];                                // Kartenzustand je Skizze, für die Fußnote
   const zeilen = fp.zeilen.map((z, i) => {
     const vorher = fp.zeilen[i - 1];
-    const skizze = !p.druck.skizzeAuto || !track.length ? '' : (i === 0
+    const sk = !p.druck.skizzeAuto || !track.length ? { svg: '', karte: null } : (i === 0
       ? abschnittSkizze(track, kmStart, kmStart + 1.5, p.druck.kartenHintergrund)
       : abschnittSkizze(track, vorher.kp.km, z.kp.km, p.druck.kartenHintergrund));
+    if (sk.karte) karten.push(sk.karte);
+    const skizze = sk.svg;
+    const lage = z.kp.abseits ? [z.kp.abseits.lat, z.kp.abseits.lon] : punktBeiKm(track, z.kp.km);
     const hinw = [];
     if (z.leg) hinw.push(`${e(z.leg.strasse || '')} (${e(artText(z.leg))}), ${zahl(z.leg.strecke, 1)} km`);
     if (z.kp.typ !== 'kp') hinw.push(`<strong>${e(TYP_NAME[z.kp.typ])}</strong>${z.halt > 0 ? `, ${zahl(z.halt, 0)} min` : ''}`);
@@ -331,7 +424,7 @@ function marschskizze(p) {
       <td class="nr">${z.nr}</td>
       <td class="skizzenfeld">${skizze}</td>
       <td class="zahl">${i === 0 ? '0' : zahl(z.km, 1)}</td>
-      <td class="ort"><strong>${e(z.kp.ort || '')}</strong></td>
+      <td class="ort"><strong>${e(z.kp.ort || '')}</strong>${lage ? `<small class="koord">${e(koordText(lage[0], lage[1]))}</small>` : ''}</td>
       <td class="hinweise">${hinw.join('<br>')}</td>
     </tr>`;
   }).join('');
@@ -347,13 +440,13 @@ function marschskizze(p) {
           <th>Marschweg</th><td>${zahl(fp.kmGesamt, 1)} km, ${dauerText(fp.ende - fp.start)}</td></tr>
     </table>
     <h3 class="zwischentitel">Marschweg</h3>
-    ${uebersichtSkizze(p, fp, p.druck.kartenHintergrund) || '<div class="skizzenfeld gross"></div>'}
+    ${uebersicht.svg || '<div class="skizzenfeld gross"></div>'}
     ${fp.zeilen.length < 2 ? leer('Noch keine Route: Kontrollpunkte unter „Route“ anlegen oder eine GPX-Datei laden.') : `
     <table class="raster tabelle skizzentabelle">
       <colgroup><col class="c-nr"><col class="c-skizze"><col class="c-km"><col class="c-ort"><col class="c-hinw"></colgroup>
       <thead><tr><th>Lfd.<br>Nr.</th><th>Ortsskizze</th><th>km</th><th>Ortschaften</th><th>Hinweise</th></tr></thead>
       <tbody>${zeilen}</tbody>
-    </table>`}`;
+    </table>${fussnoten(p, [uebersicht.karte, ...karten])}`}`;
   return blatt('marschskizze', 'hoch', inhalt, p);
 }
 

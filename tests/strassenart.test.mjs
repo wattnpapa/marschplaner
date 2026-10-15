@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  analysiere, offeneStuecke, passtZu, leereArten, abfrage, klasseVon, referenzen, abtasten, baueArten, anteileImAbschnitt, strasseImAbschnitt, klassenLaeufe
+  analysiere, fehlerText, abbruchFehler, offeneStuecke, passtZu, leereArten, abfrage, klasseVon, referenzen, abtasten, baueArten, anteileImAbschnitt, strasseImAbschnitt, klassenLaeufe
 } from '../js/strassenart.js';
 import { trackLaengeM } from '../js/geo.js';
 import { fahrplan } from '../js/rechnen.js';
@@ -170,4 +170,12 @@ test('Scheitern alle Stücke, wird der Fehler gemeldet; Teilerfolg nicht', async
     /504/
   );
   assert.equal(offeneStuecke(leereArten(25)), 3);
+});
+
+test('Fehlertexte nennen keinen Host und sagen, was zu tun ist', () => {
+  assert.match(fehlerText(new TypeError('Failed to fetch')), /Keine Verbindung.*Netz/);
+  assert.match(fehlerText(new Error('overpass-api.de antwortet mit 504')), /überlastet/);
+  assert.match(fehlerText(new Error('overpass-api.de: Anfragekontingent erschöpft')), /begrenzt/);
+  assert.doesNotMatch(fehlerText(new Error('overpass-api.de antwortet nicht')), /overpass-api/);
+  assert.equal(fehlerText(abbruchFehler('Die Planung wurde gewechselt.')), 'Die Planung wurde gewechselt.');
 });

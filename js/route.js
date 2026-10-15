@@ -85,8 +85,17 @@ export function kpHinzufuegen(p, km, typ = 'kp', extra = {}) {
   return kp;
 }
 
+/**
+ * Entfernt einen Kontrollpunkt. War es der Ablauf- oder der Zielpunkt, übernimmt
+ * der nächste Punkt am Ende diese Rolle – sonst bliebe die Strecke ohne Start bzw. Ziel.
+ */
 export function kpEntfernen(p, id) {
+  const war = p.route.kontrollpunkte.find(k => k.id === id);
   p.route.kontrollpunkte = p.route.kontrollpunkte.filter(k => k.id !== id);
+  if (!war || !p.route.kontrollpunkte.length) return;
+  const sortiert = sortierteKp(p.route);
+  if (war.typ === 'ablauf' && sortiert[0].typ === 'kp') sortiert[0].typ = 'ablauf';
+  if (war.typ === 'ziel' && sortiert[sortiert.length - 1].typ === 'kp') sortiert[sortiert.length - 1].typ = 'ziel';
 }
 
 /** Hält die Liste nach Kilometerstand sortiert; der erste Punkt bleibt der Ablaufpunkt */
@@ -115,10 +124,26 @@ export function routeLoeschen(p) {
   p.route.kontrollpunkte = [];
 }
 
-/** Übernimmt das OSM-Profil der Straßenarten; alle Abschnitte rechnen danach anteilig („auto“) */
-export function artenUebernehmen(p, arten) {
+/**
+ * Übernimmt das OSM-Profil der Straßenarten; die Abschnitte rechnen danach anteilig
+ * („auto“). Mit `handBehalten` bleiben von Hand gesetzte Arten (BAB/Ort) stehen.
+ */
+export function artenUebernehmen(p, arten, { handBehalten = false } = {}) {
   p.route.arten = arten;
-  for (const kp of p.route.kontrollpunkte) kp.klasse = 'auto';
+  for (const kp of p.route.kontrollpunkte) {
+    if (handBehalten && kp.klasse !== 'bul' && kp.klasse !== 'auto') continue;
+    kp.klasse = 'auto';
+  }
+}
+
+/** Zahl der Abschnitte mit von Hand gesetzter Straßenart (nicht Vorgabe „BuL“, nicht „auto“); der Ablaufpunkt hat keinen Abschnitt */
+export function handArten(p) {
+  return sortierteKp(p.route).filter((k, i) => i > 0 && k.klasse !== 'bul' && k.klasse !== 'auto').length;
+}
+
+/** Die Übernahme eines Platzes als Kontrollpunkt, falls schon geschehen */
+export function kpZuPlatz(p, platzId) {
+  return p.route.kontrollpunkte.find(k => k.platzId === platzId) ?? null;
 }
 
 const PLATZ_STANDARD = { rast: 'Rastplatz', tank: 'Tankstelle', parkplatz: 'Parkplatz' };
@@ -133,6 +158,7 @@ export function kpAusPlatz(p, platz, typ = 'rast') {
   const abseits = platz.abstandM >= 50 ? { lat: platz.lat, lon: platz.lon, m: platz.abstandM } : null;
   return kpHinzufuegen(p, platz.km, typ, {
     ort: platz.name || PLATZ_STANDARD[platz.art] || 'Platz',
+    platzId: platz.id,
     bemerkung: bem,
     abseits,
     umwegKm: abseits ? umwegKm(platz.abstandM) : 0

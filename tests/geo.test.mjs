@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { abstandM, trackLaengeM, punktBeiKm, naechsterKm, vereinfachen, teilTrack } from '../js/geo.js';
-import { leseGpx } from '../js/gpx.js';
+import {
+  abstandM, trackLaengeM, punktBeiKm, naechsterKm, vereinfachen, teilTrack,
+  schoenerMassstab, laengeText, koordText, meterProMercatorEinheit
+} from '../js/geo.js';
+import { leseGpx, schreibeGpx } from '../js/gpx.js';
 
 // Rund 11,12 km nach Norden: je 0,05° Breite ≈ 5,56 km
 const TRACK = [[48.00, 8.00], [48.05, 8.00], [48.10, 8.00]];
@@ -78,4 +81,41 @@ test('GPX: Attribute in beliebiger Reihenfolge, Apostroph-Quotes, ungültige Wer
 test('GPX: kein GPX wirft', () => {
   assert.throws(() => leseGpx('<html></html>'), /keine GPX/);
   assert.throws(() => leseGpx(null));
+});
+
+test('schöner Maßstab: 1, 2 oder 5 mal Zehnerpotenz, nie länger als erlaubt', () => {
+  assert.equal(schoenerMassstab(730), 500);
+  assert.equal(schoenerMassstab(1999), 1000);
+  assert.equal(schoenerMassstab(2000), 2000);
+  assert.equal(schoenerMassstab(48000), 20000);
+  assert.equal(schoenerMassstab(0), 0);
+  assert.equal(schoenerMassstab(NaN), 0);
+  assert.equal(laengeText(500), '500 m');
+  assert.equal(laengeText(2500), '2,5 km');
+});
+
+test('Maßstab: Meter je Karteneinheit nimmt zu den Polen hin ab', () => {
+  assert.ok(Math.abs(meterProMercatorEinheit(0) - 40075016.686) < 1);
+  assert.ok(meterProMercatorEinheit(60) < meterProMercatorEinheit(50));
+  assert.ok(Math.abs(meterProMercatorEinheit(60) / meterProMercatorEinheit(0) - 0.5) < 1e-9);
+});
+
+test('Koordinaten als Dezimalgrad mit Himmelsrichtung', () => {
+  assert.equal(koordText(49.41234, 8.69406), '49,4123° N, 8,6941° E');
+  assert.equal(koordText(-33.8688, -70.5), '33,8688° S, 70,5000° W');
+  assert.equal(koordText(NaN, 1), '');
+});
+
+test('GPX schreiben und wieder lesen: Verlauf und Punkte bleiben erhalten', () => {
+  const xml = schreibeGpx({
+    name: 'Marsch <Nord> & Süd',
+    track: [[49.1, 8.1], [49.2, 8.2], [49.3, 8.3]],
+    punkte: [{ name: '2 Rastplatz „Eich“', lat: 49.2, lon: 8.2, text: 'Rast, 30 min' }]
+  });
+  const gpx = leseGpx(xml);
+  assert.equal(gpx.name, 'Marsch <Nord> & Süd');
+  assert.equal(gpx.track.length, 3);
+  assert.deepEqual(gpx.track[1], [49.2, 8.2]);
+  assert.equal(gpx.wegpunkte.length, 1);
+  assert.equal(gpx.wegpunkte[0].name, '2 Rastplatz „Eich“');
 });

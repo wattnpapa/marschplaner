@@ -82,3 +82,28 @@ export function leseGpx(text) {
     quelle
   };
 }
+
+/* ---------- Schreiben ---------- */
+
+function maskieren(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Schreibt Verlauf und benannte Punkte als GPX 1.1 (für Navigationsgeräte und andere Planer).
+ * @param {{name?:string, track:number[][], punkte?:{name:string, lat:number, lon:number, text?:string}[]}} d
+ */
+export function schreibeGpx({ name = '', track, punkte = [] }) {
+  const wpt = punkte.map(p => `  <wpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><name>${maskieren(p.name)}</name>${p.text ? `<desc>${maskieren(p.text)}</desc>` : ''}</wpt>`);
+  const trkpt = track.map(q => `      <trkpt lat="${q[0].toFixed(6)}" lon="${q[1].toFixed(6)}"/>`);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Marschplaner" xmlns="http://www.topografix.com/GPX/1/1">
+${wpt.join('\n')}${wpt.length ? '\n' : ''}  <trk>
+    <name>${maskieren(name)}</name>
+    <trkseg>
+${trkpt.join('\n')}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+}

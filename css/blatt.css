@@ -102,6 +102,8 @@
 .blatt .skizzentabelle td.nr { text-align: center; font-weight: 700; font-size: 11pt; vertical-align: middle; }
 .blatt .skizzentabelle td.zahl { vertical-align: middle; text-align: center; }
 .blatt .skizzentabelle td.ort { vertical-align: middle; }
+.blatt .skizzentabelle td.ort small.koord { display: block; font-weight: 400; font-size: 6.8pt; color: #333; margin-top: 0.8mm; font-variant-numeric: tabular-nums; }
+.blatt .fussnote { margin: 2.5mm 0 0; font-size: 7pt; color: #222; line-height: 1.35; }
 .blatt .skizzentabelle td.skizzenfeld { padding: 0.6mm; }
 .blatt .skizzentabelle td.hinweise { font-size: 8pt; }
 .blatt svg.skizze { display: block; width: 100%; height: 26mm; }

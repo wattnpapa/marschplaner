@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  abfrage, normalisiere, umwegKm, vorschlagen, sucheEntlang, offeneStuecke, passtZu, zeitBeiKm, kmBeiZeit
+  abfrage, normalisiere, umwegKm, vorschlagen, sucheEntlang, offeneStuecke, passtZu, zeitBeiKm, kmBeiZeit, uhrBeiKm
 } from '../js/plaetze.js';
+import { kpAusPlatz, kpZuPlatz, kpEntfernen, handArten, artenUebernehmen } from '../js/route.js';
 import { fahrplan } from '../js/rechnen.js';
 import { trackLaengeM } from '../js/geo.js';
 
@@ -123,4 +124,69 @@ test('Suche: ausgefallenes Stück bleibt offen, der zweite Lauf holt nur dieses 
   });
   assert.equal(offeneStuecke(zweiter), 0);
   assert.equal(zweiter.liste.length, erster.liste.length);                     // nichts doppelt
+});
+
+/* ---- Uhrzeit mit Halten, Übernahme, Abbruch ---- */
+
+test('Uhrzeit bei km enthält die Halte davor (nicht nur Fahrzeit)', () => {
+  const p = projekt();
+  const ohne = fahrplan(p, p.kolonnen[0]);
+  const mitte = LAENGE / 2;
+  const vorher = uhrBeiKm(ohne, mitte);
+  assert.equal(vorher, ohne.start + zeitBeiKm(ohne, mitte));
+  p.route.kontrollpunkte.push({ id: 'r', typ: 'rast', km: LAENGE / 4, klasse: 'bul', halt: 30 });
+  const mit = fahrplan(p, p.kolonnen[0]);
+  assert.equal(uhrBeiKm(mit, mitte), vorher + 30);
+  assert.equal(uhrBeiKm(mit, LAENGE / 8), uhrBeiKm(ohne, LAENGE / 8), 'vor dem Halt ändert sich nichts');
+});
+
+test('Platz übernehmen merkt sich die Herkunft; zweite Übernahme lässt sich erkennen', () => {
+  const p = projekt();
+  const platz = normalisiere(ELEMENTE, TRACK, 1000).find(x => x.id === 'n1');
+  assert.equal(kpZuPlatz(p, 'n1'), null);
+  const kp = kpAusPlatz(p, platz, 'rast');
+  assert.equal(kp.platzId, 'n1');
+  assert.equal(kpZuPlatz(p, 'n1').id, kp.id);
+});
+
+test('Ablauf- oder Zielpunkt entfernen: der nächste Punkt übernimmt die Rolle', () => {
+  const p = projekt();
+  p.route.kontrollpunkte.push({ id: 'm', typ: 'kp', km: 20, klasse: 'bul' });
+  kpEntfernen(p, 'a');
+  assert.equal(p.route.kontrollpunkte.find(k => k.id === 'm').typ, 'ablauf');
+  kpEntfernen(p, 'b');
+  assert.equal(p.route.kontrollpunkte.find(k => k.id === 'm').typ, 'ablauf', 'einziger Punkt bleibt Ablauf');
+});
+
+test('Von Hand gesetzte Straßenarten lassen sich beim Übernehmen des OSM-Profils behalten', () => {
+  const p = projekt();
+  p.route.kontrollpunkte.splice(1, 0, { id: 'x', typ: 'kp', km: 20, klasse: 'bab' });
+  assert.equal(handArten(p), 1);
+  artenUebernehmen(p, { k: '', fertig: [] }, { handBehalten: true });
+  assert.equal(p.route.kontrollpunkte.find(k => k.id === 'x').klasse, 'bab');
+  assert.equal(p.route.kontrollpunkte.find(k => k.id === 'b').klasse, 'auto');
+  artenUebernehmen(p, { k: '', fertig: [] });
+  assert.equal(p.route.kontrollpunkte.find(k => k.id === 'x').klasse, 'auto');
+});
+
+test('Suche: Abbruch beendet den Lauf sofort, ohne weitere Anfragen', async () => {
+  const lang = [[lat(0), 8.0], [lat(25), 8.0]];
+  const steuerung = new AbortController();
+  steuerung.abort();
+  await mitFetch(() => antwort([]), async (aufrufe) => {
+    await assert.rejects(sucheEntlang(lang, 1000, { versuche: 2, tempo: 0, signal: steuerung.signal }), { name: 'Abbruch' });
+    assert.equal(aufrufe.length, 0);
+  });
+});
+
+test('Suche: Abbruch aus dem Stück-Rückruf (Planung gewechselt) zählt nicht als Stückfehler', async () => {
+  const lang = [[lat(0), 8.0], [lat(25), 8.0]];
+  await mitFetch(() => antwort(ELEMENTE.slice(0, 2)), async (aufrufe) => {
+    const fehler = Object.assign(new Error('Planung gewechselt'), { name: 'Abbruch' });
+    await assert.rejects(
+      sucheEntlang(lang, 1000, { versuche: 2, tempo: 0, beiStueck: () => { throw fehler; } }),
+      { name: 'Abbruch' }
+    );
+    assert.equal(aufrufe.length, 1, 'die übrigen Stücke werden nicht mehr abgefragt');
+  });
 });

@@ -44,6 +44,43 @@ export function abfrage(track, radiusM = 30) {
   return `[out:json][timeout:25][maxsize:50000000];way["highway"~"^(${STRASSEN})$"](around:${radiusM},${polylinie(track)});out tags geom;`;
 }
 
+/** Fehler, der einen Lauf bewusst beendet (Nutzer bricht ab, Planung gewechselt) – wird nie als Stückfehler weitergezählt */
+export function abbruchFehler(text = 'Abgebrochen.') {
+  const err = new Error(text);
+  err.name = 'Abbruch';
+  return err;
+}
+
+/** Wartet `ms`; endet vorzeitig mit einem Abbruch, wenn `signal` ausgelöst wird */
+export function schlafen(ms, signal) {
+  return new Promise((ok, nein) => {
+    if (signal?.aborted) { nein(abbruchFehler()); return; }
+    const t = setTimeout(() => { signal?.removeEventListener('abort', ab); ok(); }, ms);
+    const ab = () => { clearTimeout(t); nein(abbruchFehler()); };
+    signal?.addEventListener('abort', ab, { once: true });
+  });
+}
+
+/** Zeitgrenze für eine Anfrage; löst zusätzlich aus, wenn der Nutzer abbricht */
+export function zeitgrenze(ms, signal) {
+  const zeit = AbortSignal.timeout(ms);
+  return signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([zeit, signal]) : zeit;
+}
+
+/** Erklärt einen Netz- oder Dienstfehler so, dass man weiß, was zu tun ist (keine Hostnamen, keine Statuscodes) */
+export function fehlerText(err) {
+  const t = String(err?.message ?? err ?? '');
+  if (err?.name === 'Abbruch') return t || 'Abgebrochen.';
+  if (err?.name === 'TypeError' || /Failed to fetch|NetworkError|Load failed|network/i.test(t)) {
+    return 'Keine Verbindung zum Kartendienst – bitte Netz prüfen und erneut versuchen.';
+  }
+  if (/Anfragekontingent|429/.test(t)) return 'Der Kartendienst begrenzt gerade die Anfragen – in einigen Minuten erneut versuchen.';
+  if (/antwortet nicht|überlastet|antwortet mit|lieferte keine|TimeoutError|timed out/i.test(t)) {
+    return 'Der Kartendienst ist überlastet oder antwortet nicht – später erneut versuchen.';
+  }
+  return `Der Kartendienst meldet einen Fehler (${t}).`;
+}
+
 /**
  * Schickt eine Overpass-Abfrage ab und gibt die Elemente zurück. Die öffentlichen
  * Server begrenzen Anfragen je IP (429 „rate_limited“), sind zeitweise überlastet
@@ -51,7 +88,7 @@ export function abfrage(track, radiusM = 30) {
  * sonst wechseln sich beide Server ab.
  * @param {(sek:number, grund:string)=>void} [warte] meldet, dass gewartet wird
  */
-export async function ladeElemente(abfrageText, warte = () => {}, { versuche = 7, tempo = 1 } = {}) {
+export async function ladeElemente(abfrageText, warte = () => {}, { versuche = 7, tempo = 1, signal = null } = {}) {
   const daten = 'data=' + encodeURIComponent(abfrageText);
   let letzter = null;
   for (let versuch = 0; versuch < versuche; versuch++) {
@@ -59,7 +96,7 @@ export async function ladeElemente(abfrageText, warte = () => {}, { versuche = 7
     let pause = 2 * (versuch + 1);
     try {
       const r = await fetch(url, {
-        method: 'POST', body: daten, signal: AbortSignal.timeout(45000),
+        method: 'POST', body: daten, signal: zeitgrenze(45000, signal),
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
       });
       if (r.status === 429) { pause = 15; throw new Error(`${new URL(url).host}: Anfragekontingent erschöpft`); }
@@ -72,8 +109,9 @@ export async function ladeElemente(abfrageText, warte = () => {}, { versuche = 7
       }
       return json.elements || [];
     } catch (err) {
+      if (signal?.aborted) throw abbruchFehler();
       letzter = err.name === 'TimeoutError' ? new Error(`${new URL(url).host} antwortet nicht`) : err;
-      if (versuch < versuche - 1) { warte(pause, letzter.message); await new Promise(res => setTimeout(res, pause * 1000 * tempo)); }
+      if (versuch < versuche - 1) { warte(pause, letzter.message); await schlafen(pause * 1000 * tempo, signal); }
     }
   }
   throw letzter || new Error('Overpass nicht erreichbar.');
@@ -223,30 +261,32 @@ export function passtZu(arten, laengeKm) {
  * @param {{fortschritt?:Function, vorhanden?:object, beiStueck?:Function, versuche?:number, tempo?:number}} [opt]
  */
 export async function analysiere(track, opt = {}) {
-  const { fortschritt = () => {}, vorhanden = null, beiStueck = () => {}, versuche, tempo = 1 } = opt;
+  const { fortschritt = () => {}, vorhanden = null, beiStueck = () => {}, versuche, tempo = 1, signal = null } = opt;
   const laenge = trackLaengeM(track) / 1000;
   const arten = passtZu(vorhanden, laenge) ? structuredClone(vorhanden) : leereArten(laenge);
   const stuecke = arten.fertig.length;
   let hinweis = '', letzterFehler = null, geholt = 0;
   for (let s = 0; s < stuecke; s++) {
     if (arten.fertig[s]) continue;                       // schon vorhanden – nicht noch einmal fragen
+    if (signal?.aborted) throw abbruchFehler();
     fortschritt(s, stuecke, hinweis);
     hinweis = '';
     const von = s * STUECK_KM, bis = Math.min(laenge, (s + 1) * STUECK_KM);
     const sub = teilTrack(track, Math.max(0, von - 0.1), Math.min(laenge, bis + 0.1));
     if (sub.length < 2) { arten.fertig[s] = true; continue; }
     try {
-      const wege = await ladeWege(sub, (sek, grund) => fortschritt(s, stuecke, `${grund} – neuer Versuch in ${sek} s`), { versuche, tempo });
+      const wege = await ladeWege(sub, (sek, grund) => fortschritt(s, stuecke, `${grund} – neuer Versuch in ${sek} s`), { versuche, tempo, signal });
       schreibeProben(arten, abtasten(track, wege, von, bis));
       arten.fertig[s] = true;
       arten.luecken = offeneStuecke(arten);
       geholt++;
       beiStueck(arten);
     } catch (err) {                                      // ein Stück darf fehlen, der Rest zählt
+      if (err.name === 'Abbruch') throw err;             // Nutzer bricht ab oder Planung gewechselt: nicht weiterfragen
       letzterFehler = err;
       arten.luecken = offeneStuecke(arten);
     }
-    if (s < stuecke - 1) await new Promise(r => setTimeout(r, PAUSE_MS * tempo));
+    if (s < stuecke - 1) await schlafen(PAUSE_MS * tempo, signal);
   }
   fortschritt(stuecke, stuecke);
   arten.luecken = offeneStuecke(arten);

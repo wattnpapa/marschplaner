@@ -120,3 +120,33 @@ export function vereinfachen(track, toleranzM) {
 export function runden(track) {
   return track.map(p => [Math.round(p[0] * 1e5) / 1e5, Math.round(p[1] * 1e5) / 1e5]);
 }
+
+/* ---------- Maßstab und Koordinaten für die Blätter ---------- */
+
+const UMFANG_M = 40075016.686;             // Erdumfang am Äquator (Web-Mercator)
+
+/** Meter, die in der Web-Mercator-Karte (Weltbreite = 1) einer Einheit in der Breite `lat` entsprechen */
+export function meterProMercatorEinheit(lat) {
+  return UMFANG_M * Math.cos(Math.max(-85, Math.min(85, lat)) * RAD);
+}
+
+/** Größte „runde“ Länge (1, 2 oder 5 × 10ⁿ m), die höchstens `maxM` lang ist; 0 bei ungültiger Eingabe */
+export function schoenerMassstab(maxM) {
+  if (!(maxM > 0) || !Number.isFinite(maxM)) return 0;
+  const e = 10 ** Math.floor(Math.log10(maxM));
+  for (const f of [5, 2, 1]) if (f * e <= maxM) return f * e;
+  return e;
+}
+
+/** „500 m“ bzw. „2 km“ */
+export function laengeText(m) {
+  const z = (x) => String(+x.toFixed(2)).replace('.', ',');
+  return m >= 1000 ? `${z(m / 1000)} km` : `${z(m)} m`;
+}
+
+/** Position als Dezimalgrad mit Referenzsystem: „49,4123° N, 8,6941° E“ */
+export function koordText(lat, lon, stellen = 4) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return '';
+  const g = (x, plus, minus) => `${Math.abs(x).toFixed(stellen).replace('.', ',')}° ${x >= 0 ? plus : minus}`;
+  return `${g(lat, 'N', 'S')}, ${g(lon, 'E', 'W')}`;
+}

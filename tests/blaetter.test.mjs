@@ -100,7 +100,7 @@ test('HTML aus Eingaben wird maskiert', () => {
 test('Ältere/unvollständige Projekte werden mit Vorgaben aufgefüllt', () => {
   const m = migrieren({ id: 'x', name: 'Alt', kopf: { von: 'A' } });
   assert.equal(m.kopf.von, 'A');
-  assert.equal(m.kopf.ablaufzeit, '08:00');
+  assert.equal(m.kopf.ablaufzeit, '');                  // keine erfundene Ablaufzeit: Prüfung verlangt sie
   assert.equal(m.parameter.v.bul, 50);
   assert.equal(m.kolonnen.length, 1);
   assert.ok(m.unterlagen.zeilen.length > 10);
@@ -113,4 +113,68 @@ test('Pfadzugriff über @id bleibt bei Umsortierung stabil', () => {
   setzePfad(p, `kolonnen.@${id}.name`, 'Neu');
   assert.equal(lesePfad(p, `kolonnen.@${id}.name`), 'Neu');
   assert.equal(p.kolonnen.find(k => k.id === id).name, 'Neu');
+});
+
+/* ---- Marschskizze: lesbar auf Papier ---- */
+
+test('Marschskizze: Maßstab, Nordpfeil, Koordinaten und Bezugsangaben stehen auf dem Blatt', () => {
+  const p = beispiel();
+  p.druck.kartenHintergrund = false;
+  const html = blattHtml('marschskizze', p);
+  assert.match(html, /<text[^>]*>\d+(,\d+)? (m|km)<\/text>/, 'Maßstabsbalken mit Länge');
+  assert.match(html, />N<\/text>/, 'Nordpfeil');
+  assert.match(html, /\d+,\d{4}° N, \d+,\d{4}° E/, 'Koordinaten mit Referenzsystem');
+  assert.match(html, /WGS 84/);
+  assert.match(html, /Streckenlänge laut Track/);
+  assert.doesNotMatch(html, /tile\.openstreetmap\.org/);
+  assert.doesNotMatch(html, /OpenStreetMap-Mitwirkende/, 'ohne Karte keine Kartenquelle');
+});
+
+test('Marschskizze: mit Karte steht die Quelle einmal als Fußnote, Ortsskizzen bleiben frei', () => {
+  const p = beispiel();
+  p.druck.kartenHintergrund = true;
+  const html = blattHtml('marschskizze', p);
+  assert.match(html, /tile\.openstreetmap\.org/);
+  assert.match(html, /class="fussnote"[^>]*>[^<]*Kartengrundlage: © OpenStreetMap-Mitwirkende/);
+  const ortsskizzen = html.split('class="skizze"').slice(1).map(t => t.split('</svg>')[0]);
+  assert.ok(ortsskizzen.length > 0);
+  assert.ok(ortsskizzen.every(t => !/OpenStreetMap-Mitwirkende/.test(t)), 'keine winzige Nennung in jeder Ortsskizze');
+});
+
+test('Marschskizze: Rast, Tanken und Technischer Halt unterscheiden sich ohne Farbe', () => {
+  const p = beispiel();
+  p.druck.kartenHintergrund = false;
+  const html = blattHtml('marschskizze', p);
+  const typen = new Set(p.route.kontrollpunkte.map(k => k.typ));
+  if (typen.has('rast')) assert.match(html, />R<\/text>/);
+  if (typen.has('tank')) assert.match(html, />T<\/text>/);
+  if (typen.has('th')) assert.match(html, />H<\/text>/);
+  assert.ok(typen.has('rast') || typen.has('tank') || typen.has('th'), 'das Beispiel enthält mindestens einen Halt');
+});
+
+test('Legende nennt nur die Straßenarten, die auf dem Blatt vorkommen', () => {
+  const p = beispiel();
+  p.druck.kartenHintergrund = false;
+  p.route.arten = null;
+  for (const k of p.route.kontrollpunkte) k.klasse = 'bul';
+  const html = blattHtml('marschskizze', p);
+  assert.match(html, /Bundes-\/Landstr\./);
+  assert.doesNotMatch(html, />Autobahn</);
+  assert.doesNotMatch(html, />Ortschaft</);
+});
+
+test('Ohne ermittelte Straßenarten sagt das Blatt es', () => {
+  const p = beispiel();
+  p.route.arten = null;
+  assert.match(blattHtml('marschtabelle', p), /Straßenarten nicht aus Kartendaten ermittelt/);
+  assert.match(blattHtml('marschskizze', p), /Straßenarten nicht aus Kartendaten ermittelt/);
+});
+
+test('Ohne Ablaufzeit warnen die Blätter mit Uhrzeiten deutlich', () => {
+  const p = beispiel();
+  p.kopf.ablaufzeit = '';
+  for (const id of ['marschtabelle', 'marschskizze', 'belegung']) {
+    assert.match(blattHtml(id, p), /Ablaufzeit fehlt/, id);
+  }
+  assert.doesNotMatch(blattHtml('unterlagen', p), /Ablaufzeit fehlt/);
 });

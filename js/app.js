@@ -12,21 +12,23 @@ import { e } from './html.js';
 import { BLAETTER, blattHtml } from './blaetter.js';
 import {
   KLASSEN, PUNKTTYPEN, zahl, zeitText, zeitParse, dauerText, sekundenText,
-  sortierteKp, fahrplan, haltKonflikte, kolonnenLaenge, marschHilfe, durchlaufMin
+  sortierteKp, fahrplan, haltKonflikte, kolonnenLaenge, marschHilfe, durchlaufMin, TYP_NAME
 } from './rechnen.js';
 import {
   AUFTRAG_ABSCHNITTE, AUFTRAG_AUTO, autoAuftrag, UNTERLAGEN_ROLLEN, UNTERLAGEN_STANDARD,
   HINWEIS_VORLAGE, neueKolonne, neueId
 } from './daten.js';
-import { leseGpx } from './gpx.js';
+import { leseGpx, schreibeGpx } from './gpx.js';
 import {
-  routeAusGpx, artenUebernehmen, kpAusPlatz, kpHinzufuegen, kpEntfernen, kpOrdnen, kpAnTrackSetzen, trackKm, kpPosition, routeLoeschen
+  routeAusGpx, artenUebernehmen, kpAusPlatz, kpHinzufuegen, kpEntfernen, kpOrdnen, kpAnTrackSetzen, trackKm, kpPosition, routeLoeschen,
+  handArten, kpZuPlatz
 } from './route.js';
+import { punktBeiKm } from './geo.js';
 import { karteErzeugen } from './karte.js';
-import { drucken, pdfName } from './druck.js';
+import { drucken, pdfName, ohneKarte } from './druck.js';
 import { beispielFuellen } from './beispiel.js';
-import { analysiere, anteileImAbschnitt, offeneStuecke, passtZu } from './strassenart.js';
-import { sucheEntlang, vorschlagen, ART_NAME, offeneStuecke as offenePlaetze, passtZu as plaetzePassen } from './plaetze.js';
+import { analysiere, anteileImAbschnitt, offeneStuecke, passtZu, abbruchFehler, schlafen, fehlerText, zeitgrenze } from './strassenart.js';
+import { sucheEntlang, vorschlagen, uhrBeiKm, umwegKm, ART_NAME, offeneStuecke as offenePlaetze, passtZu as plaetzePassen } from './plaetze.js';
 
 const $ = (sel) => document.querySelector(sel);
 const editor = $('#editor');
@@ -38,16 +40,28 @@ let navTimer = 0;
 
 function merken(key, wert) { try { localStorage.setItem(key, wert); } catch { /* ohne Speicher eben nicht */ } }
 function erinnern(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function vergessen(key) { try { localStorage.removeItem(key); } catch { /* nichts zu vergessen */ } }
 
 let toastTimer = null;
-function meldung(text, art = '', dauerhaft = false) {
+/** Kurze Meldung unten; mit `aktion` ({ text, fn }) bekommt sie einen Knopf, z. B. „Rückgängig“ */
+function meldung(text, art = '', dauerhaft = false, aktion = null) {
   const t = $('#toast');
   t.textContent = text;
-  t.className = `toast sichtbar ${art}`;
+  if (aktion) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toast-knopf';
+    b.textContent = aktion.text;
+    b.addEventListener('click', () => { t.className = 'toast'; aktion.fn(); });
+    t.append(' ', b);
+  }
+  t.className = `toast sichtbar ${art}${aktion ? ' mit-aktion' : ''}`;
   clearTimeout(toastTimer);
   if (dauerhaft) return;
-  toastTimer = setTimeout(() => { t.className = 'toast'; }, art === 'fehler' ? 6000 : 3200);
+  toastTimer = setTimeout(() => { t.className = 'toast'; }, art === 'fehler' || aktion ? 9000 : 3200);
 }
+
+const rueckgaengigAktion = { text: 'Rückgängig', fn: () => store.rueckgaengig() };
 
 function feld(label, pfad, p, opt = {}) {
   const wert = store.lesePfad(p, pfad) ?? '';
@@ -67,7 +81,7 @@ function feld(label, pfad, p, opt = {}) {
   }
   return `<label class="feld ${opt.klasse || ''} ${opt.einheit ? 'mit-einheit' : ''}">
     <span class="feld-name">${e(label)}</span>${eingabe}${opt.einheit ? `<span class="einheit">${e(opt.einheit)}</span>` : ''}
-    ${opt.hinweis ? `<small class="hinweis">${e(opt.hinweis)}</small>` : ''}</label>`;
+    ${opt.hinweis ? `<small class="hinweis">${e(opt.hinweis)}</small>` : ''}${opt.zusatz || ''}</label>`;
 }
 
 function download(name, inhalt, typ) {
@@ -86,7 +100,20 @@ function pruefung(p) {
   const kps = sortierteKp(p.route);
   if (kps.length < 2) m.push({ stufe: 'fehler', text: 'Es ist noch keine Route angelegt (mindestens Ablauf- und Zielpunkt).', ansicht: 'route' });
   if (zeitParse(p.kopf.ablaufzeit) === null) m.push({ stufe: 'fehler', text: 'Die Ablaufzeit fehlt oder ist ungültig.', ansicht: 'eckdaten' });
+  if (zeitParse(p.kopf.ablaufzeit) !== null && !p.kopf.datum) m.push({ stufe: 'warnung', text: 'Das Datum des Marschbeginns fehlt.', ansicht: 'eckdaten' });
   if (store.speicherProbleme()) m.push({ stufe: 'fehler', text: 'Der Browser kann nicht speichern. Planung bitte über „Planungen → Als Datei sichern“ aufheben.', ansicht: null });
+  KLASSEN.forEach(k => {
+    const v = +p.parameter.v[k.id];
+    if (!(v >= 1 && v <= 130)) m.push({ stufe: 'warnung', text: `Marschgeschwindigkeit ${k.kurz}: ${Number.isFinite(v) ? zahl(v, 1) : '–'} km/h ist nicht plausibel (1 bis 130).`, ansicht: 'eckdaten' });
+  });
+  if (kps.length >= 2 && p.route.track.length > 1 && !p.route.arten) {
+    m.push({ stufe: 'warnung', text: 'Die Straßenarten sind nicht ermittelt: Es gilt die eingetragene Straßenart (Vorgabe Bundes-/Landstraße), Fahrzeiten können abweichen.', ansicht: 'route' });
+  }
+  kps.forEach((k, i) => {
+    if (k.halt !== null && k.halt !== undefined && k.halt !== '' && !(+k.halt >= 0 && +k.halt <= 600)) {
+      m.push({ stufe: 'warnung', text: `Kontrollpunkt ${i + 1}: Halt von ${zahl(+k.halt, 0)} min ist nicht plausibel (0 bis 600).`, ansicht: 'route' });
+    }
+  });
   p.kolonnen.forEach(k => {
     if (!((k.einzel || 0) + (k.gespanne || 0))) m.push({ stufe: 'warnung', text: `${k.name}: keine Fahrzeuge eingetragen – Marschlänge und Durchlaufzeit bleiben leer.`, ansicht: 'kolonnen' });
   });
@@ -102,13 +129,25 @@ function pruefung(p) {
     stufe: 'warnung', ansicht: 'kolonnen',
     text: `Halt ${k.nr}${k.kp.ort ? ' (' + k.kp.ort + ')' : ''}: ${k.a.name} und ${k.b.name} stehen zugleich dort (${zeitText(Math.max(k.a.von, k.b.von))}–${zeitText(Math.min(k.a.bis, k.b.bis))}).`
   }));
+  const gesichertAm = store.gesichertAm(p.id);
+  if (!gesichertAm) m.push({ stufe: 'hinweis', text: 'Diese Planung ist noch nicht als Datei gesichert; sie liegt nur in diesem Browser.', ansicht: null, aktion: 'sichern' });
+  else if (gesichertAm < (p.geaendert || '')) m.push({ stufe: 'hinweis', text: `Seit der letzten Dateisicherung (${sicherungText(p)}) wurde die Planung geändert.`, ansicht: null, aktion: 'sichern' });
   return m;
+}
+
+/** „als Datei gesichert vor 3 Tagen“ bzw. „noch nie als Datei gesichert“ */
+function sicherungText(p) {
+  const t = store.gesichertAm(p.id);
+  if (!t) return 'noch nie als Datei gesichert';
+  const tage = Math.floor((Date.now() - Date.parse(t)) / 864e5);
+  return `als Datei gesichert ${tage <= 0 ? 'heute' : tage === 1 ? 'gestern' : `vor ${tage} Tagen`}`;
 }
 
 function meldungsListe(liste, mitSprung = true) {
   if (!liste.length) return '<ul class="meldungen"><li class="ok">Keine Auffälligkeiten.</li></ul>';
   return `<ul class="meldungen">${liste.map(x => `<li class="${x.stufe}"><span>${e(x.text)}</span>${
-    mitSprung && x.ansicht ? `<button type="button" class="knopf klein" data-aktion="gehe" data-ziel="${x.ansicht}">Öffnen</button>` : ''}</li>`).join('')}</ul>`;
+    mitSprung && x.ansicht ? `<button type="button" class="knopf klein" data-aktion="gehe" data-ziel="${x.ansicht}">Öffnen</button>` : ''}${
+    mitSprung && x.aktion === 'sichern' ? '<button type="button" class="knopf klein" data-aktion="sichern">Jetzt sichern</button>' : ''}</li>`).join('')}</ul>`;
 }
 
 /* ====================================================================
@@ -118,9 +157,9 @@ function meldungsListe(liste, mitSprung = true) {
 function vEckdaten(p) {
   const par = p.parameter;
   const zeile = (k) => `<tr><td><strong>${e(k.kurz)}</strong> <span class="hinweis">${e(k.name)}</span></td>
-    <td><input type="number" data-typ="zahl" data-p="parameter.v.${k.id}" value="${e(par.v[k.id])}" min="0" step="any" aria-label="Marschgeschwindigkeit ${e(k.kurz)}"></td>
-    <td><input type="number" data-typ="zahl" data-p="parameter.aufhol.${k.id}" value="${e(par.aufhol[k.id])}" min="0" step="any" aria-label="Aufholgeschwindigkeit ${e(k.kurz)}"></td>
-    <td><input type="number" data-typ="zahl" data-p="parameter.abstand.${k.id}" value="${e(par.abstand[k.id])}" min="0" step="any" aria-label="Fahrzeugabstand ${e(k.kurz)}"></td></tr>`;
+    <td><input type="number" data-typ="zahl" data-p="parameter.v.${k.id}" value="${e(par.v[k.id])}" min="1" max="130" step="any" aria-label="Marschgeschwindigkeit ${e(k.kurz)}"></td>
+    <td><input type="number" data-typ="zahl" data-p="parameter.aufhol.${k.id}" value="${e(par.aufhol[k.id])}" min="1" max="130" step="any" aria-label="Aufholgeschwindigkeit ${e(k.kurz)}"></td>
+    <td><input type="number" data-typ="zahl" data-p="parameter.abstand.${k.id}" value="${e(par.abstand[k.id])}" min="0" max="1000" step="any" aria-label="Fahrzeugabstand ${e(k.kurz)}"></td></tr>`;
   return `
     <h1>Eckdaten</h1>
     <p class="lead">Worum geht es, wann geht es los, mit welchen Planungswerten wird gerechnet.</p>
@@ -129,7 +168,7 @@ function vEckdaten(p) {
         ${feld('Kennung / Auftragsnummer', 'kopf.kennung', p, { hinweis: 'Steht oben rechts auf jedem Blatt.' })}
         ${feld('Marschverband / Einheit', 'kopf.verband', p)}
         ${feld('Datum (Marschbeginn)', 'kopf.datum', p, { typ: 'date' })}
-        ${feld('Ablaufzeit (Uhr)', 'kopf.ablaufzeit', p, { typ: 'time', hinweis: 'Wann die Spitze der ersten Kolonne den Ablaufpunkt passiert.' })}
+        ${feld('Ablaufzeit (Uhr)', 'kopf.ablaufzeit', p, { typ: 'time', hinweis: 'Pflicht – ohne Ablaufzeit rechnet der Fahrplan nicht. Wann die Spitze der ersten Kolonne den Ablaufpunkt passiert.' })}
         ${feld('Marsch von', 'kopf.von', p)}
         ${feld('Marsch nach', 'kopf.nach', p)}
       </div>
@@ -165,20 +204,20 @@ function kpTabelle(p) {
     const vorgabe = p.parameter.halt?.[kp.typ];
     return `<tr data-kp="${kp.id}">
       <td class="kp-nr"><strong>${i + 1}</strong>
-        <button type="button" class="knopf klein nur-symbol gefahr" data-aktion="kp-loeschen" data-id="${kp.id}" title="Punkt ${i + 1} entfernen" aria-label="Punkt ${i + 1} entfernen">✕</button></td>
+        <button type="button" class="knopf klein nur-symbol gefahr" data-aktion="kp-loeschen" data-id="${kp.id}" title="Punkt ${i + 1} entfernen (mit „Rückgängig“ zurückholbar)" aria-label="Punkt ${i + 1} entfernen">✕</button></td>
       <td><select data-p="${pf('typ')}" data-typ="text" data-neu="1" aria-label="Art des Punkts ${i + 1}">${kpOptionen(PUNKTTYPEN, kp.typ)}</select></td>
       <td><input type="text" data-p="${pf('ort')}" data-typ="text" value="${e(kp.ort)}" placeholder="Ort" aria-label="Ort ${i + 1}"></td>
+      <td class="abgeleitet" data-an="${kp.id}"></td>
       <td><input type="text" data-p="${pf('strasse')}" data-typ="text" value="${e(kp.strasse)}" placeholder="z. B. B 28" ${i === 0 ? 'disabled title="Der Ablaufpunkt hat keinen Abschnitt davor"' : ''} aria-label="Straße bis Punkt ${i + 1}"></td>
       <td><select data-p="${pf('klasse')}" data-typ="text" ${i === 0 ? 'disabled' : ''} aria-label="Straßenart bis Punkt ${i + 1}">${p.route.arten || kp.klasse === 'auto' ? `<option value="auto" ${kp.klasse === 'auto' ? 'selected' : ''}>Auto (OSM)</option>` : ''}${KLASSEN.map(k => `<option value="${k.id}" ${k.id === kp.klasse ? 'selected' : ''}>${k.kurz}</option>`).join('')}</select></td>
       <td class="num"><input type="number" step="0.1" min="0" data-p="${pf('km')}" data-typ="zahl" data-nachsort="1" value="${e(Math.round(kp.km * 100) / 100)}" aria-label="Kilometerstand ${i + 1}" ${p.route.track.length ? '' : ''}></td>
-      <td class="num"><input type="number" step="1" min="0" data-p="${pf('halt')}" data-typ="zahl" value="${e(kp.halt ?? '')}" placeholder="${vorgabe ? zahl(vorgabe, 0) : '0'}" aria-label="Halt in Minuten ${i + 1}"></td>
+      <td class="num"><input type="number" step="1" min="0" data-p="${pf('halt')}" data-typ="zahl" max="600" value="${e(kp.halt ?? '')}" placeholder="${vorgabe ? zahl(vorgabe, 0) : '0'}" aria-label="Halt in Minuten ${i + 1}"></td>
       <td class="num"><input type="number" step="0.1" min="0" data-p="${pf('umwegKm')}" data-typ="zahl" value="${e(kp.umwegKm || '')}" placeholder="0" title="Zusätzliche Strecke für Zu- und Abfahrt zu einem Platz abseits der Strecke (hin und zurück)" aria-label="Umweg in km ${i + 1}"></td>
-      <td class="abgeleitet" data-an="${kp.id}"></td>
       <td><input type="text" data-p="${pf('bemerkung')}" data-typ="text" value="${e(kp.bemerkung)}" placeholder="Bemerkung" aria-label="Bemerkung ${i + 1}"></td>
 </tr>`;
   }).join('');
   return `<table class="tab kp-tabelle">
-    <thead><tr><th>Nr</th><th>Art</th><th>Ort</th><th>Straße <span class="hinweis">(bis hierher)</span></th><th>Straßenart</th><th class="num">km</th><th class="num">Halt min</th><th class="num">Umweg km</th><th>Ankunft</th><th>Bemerkung</th></tr></thead>
+    <thead><tr><th>Nr</th><th>Art</th><th>Ort</th><th>Ankunft <span class="hinweis">(Kolonne 1)</span></th><th>Straße <span class="hinweis">(bis hierher)</span></th><th>Straßenart</th><th class="num">km</th><th class="num">Halt min</th><th class="num">Umweg km</th><th>Bemerkung</th></tr></thead>
     <tbody>${zeilen}</tbody></table>`;
 }
 
@@ -203,13 +242,14 @@ function vRoute(p) {
         <button type="button" class="knopf" data-aktion="kp-neu">＋ Kontrollpunkt</button>
         <button type="button" class="knopf" data-aktion="strassenarten" title="Straßenart und Straßennummer entlang der Route aus OpenStreetMap neu bestimmen">Straßenarten neu ermitteln</button>
         <button type="button" class="knopf" data-aktion="orte-ermitteln" title="Ortsnamen aus OpenStreetMap vorschlagen">Ortsnamen ermitteln</button>
+        <button type="button" class="knopf" data-aktion="gpx-export" title="Strecke und Kontrollpunkte als GPX-Datei, z. B. für ein Navigationsgerät">Als GPX exportieren</button>
         <button type="button" class="knopf gefahr" data-aktion="route-loeschen">Route entfernen</button>
       </div>
       <div class="rolle-tabelle" id="kp-bereich"></div>
       <p class="hinweis" style="margin:10px 0 0">„Straßenart“ gilt für den Abschnitt <em>bis zu</em> diesem Punkt und bestimmt Geschwindigkeit und Fahrzeugabstand. „Auto (OSM)“ rechnet den Abschnitt anteilig nach den Straßenarten, die OpenStreetMap entlang der Route kennt; eine feste Wahl überstimmt das. Die Straße bleibt leer, wenn OSM sie liefert, und lässt sich überschreiben. „Halt“ leer lassen = Vorgabe der Punktart. „Umweg“ ist die zusätzliche Strecke (hin und zurück) zu einem Platz abseits der Strecke; sie geht in Kilometer und Zeit ein.</p>
     </section>
     <section class="block" id="pausen-block"><h2>Pausen und Rastplätze vorschlagen</h2>
-      <p class="lead">Der Marschplaner sucht Rast-, Park- und Tankplätze im Suchradius um die Strecke und schlägt für jede Pause den besten Platz im Zeitfenster vor. Mit einem Klick wird er zum Kontrollpunkt; liegt er abseits, rechnet der Fahrplan den Umweg mit.</p>
+      <p class="lead">Der Marschplaner sucht Rast-, Park- und Tankplätze im Suchradius um die Strecke und schlägt für jede Pause den besten Platz im Zeitfenster vor. Mit einem Klick wird er zum Kontrollpunkt; liegt er abseits, rechnet der Fahrplan den Umweg mit. Die Art der Pause (Rast, Technischer Halt, Tanken) bestimmt die Haltedauer – Vorgabe unter „Eckdaten“.</p>
       <div class="formular eng">
         ${feld('Suchradius um die Strecke', 'suche.radius', p, { typ: 'number', min: 100, max: 10000, schritt: 100, einheit: 'm' })}
         ${feld('Pause alle', 'suche.intervall', p, { typ: 'number', min: 15, schritt: 5, einheit: 'min', hinweis: 'reine Fahrzeit' })}
@@ -256,8 +296,9 @@ function pausenAktualisieren() {
   const radius = +s.radius || 1000;
   if (p.route.track.length < 2) { ziel.innerHTML = '<p class="hinweis">Zuerst eine Route laden.</p>'; return; }
   if (!pl?.liste) {
-    ziel.innerHTML = '<p class="hinweis">Noch nicht gesucht. „Plätze entlang der Strecke suchen“ fragt OpenStreetMap ab.</p>';
-    karte?.setzePlaetze([], []); karte?.aktualisieren(p);
+    ziel.innerHTML = (fehlerPlaetze ? `<div class="vorgabe-hinweis fehler">⚠ ${e(fehlerPlaetze)} <button type="button" class="knopf klein" data-aktion="plaetze-suchen">Erneut versuchen</button></div>` : '')
+      + '<p class="hinweis">Noch nicht gesucht. „Plätze entlang der Strecke suchen“ fragt OpenStreetMap ab.</p>';
+    karte?.setzePlaetze([], [], new Map()); karte?.aktualisieren(p);
     return;
   }
   const arten = [s.rast && 'rast', s.parkplatz && 'parkplatz', s.tank && 'tank'].filter(Boolean);
@@ -266,8 +307,15 @@ function pausenAktualisieren() {
   const fp = fahrplan(p, p.kolonnen[0] ?? null);
 
   const hinweise = [];
+  if (fehlerPlaetze) hinweise.push(`⚠ ${fehlerPlaetze}`);
+  if (fp.ablaufFehlt) hinweise.push('Die Ablaufzeit fehlt (Eckdaten): Uhrzeiten der Pausen sind nicht verfügbar.');
   if (offenePlaetze(pl)) hinweise.push(`${offenePlaetze(pl)} von ${pl.fertig.length} Streckenstücken sind noch nicht abgefragt – „Plätze suchen“ holt nur diese nach.`);
   if (radius > pl.radius) hinweise.push(`Gesucht wurde nur bis ${zahl(pl.radius, 0)} m – für ${zahl(radius, 0)} m bitte neu suchen.`);
+
+  const genommen = new Map();                      // Platz → Nummer des Kontrollpunkts, der daraus wurde
+  sortierteKp(p.route).forEach((k, i) => { if (k.platzId) genommen.set(k.platzId, i + 1); });
+  const halt = (typ) => p.parameter.halt?.[typ];
+  const VORSCHLAG_TYP = { rast: 'rast', tank: 'tank', parkplatz: 'th' };
 
   const zeile = (k, i) => `<tr class="${i === 0 ? 'bester' : ''}">
       <td>${i === 0 ? '★' : ''}</td>
@@ -275,20 +323,23 @@ function pausenAktualisieren() {
       <td class="num">km ${zahl(k.km, 1)}<br><small class="hinweis">${k.zeitAbweichungMin > 0 ? '+' : ''}${k.zeitAbweichungMin} min</small></td>
       <td>${k.abstandM} m neben der Strecke${k.umwegKm ? `<br><small class="hinweis">Umweg ca. ${zahl(k.umwegKm, 1)} km</small>` : ''}</td>
       <td>${k.kapazitaet ? `${k.kapazitaet} Plätze` : '<span class="hinweis">Plätze unbekannt</span>'}${k.lkw ? '<br><small class="hinweis">Lkw</small>' : ''}${k.wc ? '<br><small class="hinweis">WC</small>' : ''}</td>
-      <td style="white-space:nowrap">${Object.entries(PLATZ_TYP).map(([typ, t]) =>
-        `<button type="button" class="knopf klein" data-aktion="platz-nehmen" data-id="${e(k.id)}" data-typ="${typ}">${t}</button>`).join(' ')}</td></tr>`;
+      <td style="white-space:nowrap">${genommen.has(k.id)
+        ? `<strong class="uebernommen">✓ als Punkt ${genommen.get(k.id)} übernommen</strong>`
+        : Object.entries(PLATZ_TYP).map(([typ, t]) =>
+          `<button type="button" class="knopf klein ${typ === VORSCHLAG_TYP[k.art] ? 'primaer' : ''}" data-aktion="platz-nehmen" data-id="${e(k.id)}" data-typ="${typ}" title="${t}: ${zahl(halt(typ) ?? 0, 0)} min Halt (Vorgabe aus den Eckdaten)">${t} · ${zahl(halt(typ) ?? 0, 0)} min</button>`).join(' ')}</td></tr>`;
 
-  const karten = vs.map(v => `<div class="pause"><h3>Pause ${v.n} · nach ca. ${dauerText(v.tMin)} Fahrzeit · km ${zahl(v.km, 0)} · etwa ${zeitText(fp.start + v.tMin)} Uhr</h3>
+  const karten = vs.map(v => `<div class="pause"><h3>Pause ${v.n} · nach ca. ${dauerText(v.tMin)} Fahrzeit · km ${zahl(v.km, 0)}${fp.ablaufFehlt ? '' : ` · etwa ${zeitText(uhrBeiKm(fp, v.km))} Uhr`}</h3>
     ${v.kandidaten.length
       ? `<table class="tab"><tbody>${v.kandidaten.slice(0, 4).map(zeile).join('')}</tbody></table>${v.kandidaten.length > 4 ? `<p class="hinweis">… und ${v.kandidaten.length - 4} weitere auf der Karte.</p>` : ''}`
       : '<p class="hinweis">Kein passender Platz im Zeitfenster – Radius oder Zeitfenster vergrößern, mehr Platzarten zulassen oder die Mindest-Stellplätze senken.</p>'}</div>`).join('');
 
-  ziel.innerHTML = `${hinweise.map(h => `<div class="vorgabe-hinweis">${e(h)}</div>`).join('')}
-    <p class="hinweis" style="margin:8px 0">${liste.length} Plätze im Radius gefunden${vs.length ? ` · ${vs.length} Pause(n) im Abstand von ${zahl(+s.intervall || 120, 0)} min` : ' · Strecke zu kurz für eine Pause'}.</p>${karten}`;
+  ziel.innerHTML = `${hinweise.map(h => `<div class="vorgabe-hinweis ${h.startsWith('⚠') ? 'fehler' : ''}">${e(h)}${h.startsWith('⚠') ? ' <button type="button" class="knopf klein" data-aktion="plaetze-suchen">Erneut versuchen</button>' : ''}</div>`).join('')}
+    <p class="hinweis" style="margin:8px 0">${liste.length} Plätze im Radius gefunden${vs.length ? ` · ${vs.length} Pause(n) im Abstand von ${zahl(+s.intervall || 120, 0)} min` : ' · Strecke zu kurz für eine Pause'}.
+      Uhrzeiten gelten für ${e(p.kolonnen[0]?.name || 'die erste Kolonne')} und enthalten die bereits geplanten Halte und Umwege.</p>${karten}`;
 
   const alle = new Map();
   for (const v of vs) for (const k of v.kandidaten) alle.set(k.id, k);
-  karte?.setzePlaetze([...alle.values()], vs.map(v => v.bester?.id).filter(Boolean));
+  karte?.setzePlaetze([...alle.values()], vs.map(v => v.bester?.id).filter(Boolean), genommen);
   karte?.aktualisieren(p);
 }
 
@@ -296,12 +347,29 @@ function platzNehmen(id, typ) {
   const p = store.aktuell();
   const platz = p.route.plaetze?.liste.find(x => x.id === id);
   if (!platz) return;
-  store.aendern(pp => { kpAusPlatz(pp, platz, typ); });
+  const name = platz.name || ART_NAME[platz.art];
+  const schon = kpZuPlatz(p, id);
+  if (schon) {
+    const nr = sortierteKp(p.route).findIndex(k => k.id === schon.id) + 1;
+    meldung(`„${name}“ ist schon als Punkt ${nr} übernommen.`, 'fehler');
+    return;
+  }
+  const vorher = fahrplan(p, p.kolonnen[0] ?? null);
+  store.aendern(pp => { kpAusPlatz(pp, platz, typ); }, null, `Platz „${name}“ übernommen`);
   routeAktualisieren();
-  meldung(`„${platz.name || ART_NAME[platz.art]}“ als ${PLATZ_TYP[typ]} übernommen${platz.abstandM >= 50 ? ` – inkl. Umweg ca. ${zahl(2 * platz.abstandM * 1.3 / 1000, 1)} km` : ''}.`);
+  const nachher = fahrplan(store.aktuell(), store.aktuell().kolonnen[0] ?? null);
+  const plus = nachher.ende - vorher.ende;
+  const ziel = nachher.ablaufFehlt ? `Marschzeit ${plus >= 0 ? '+' : ''}${plus} min` : `Ankunft Ziel ${zeitText(vorher.ende)} → ${zeitText(nachher.ende)} Uhr (${plus >= 0 ? '+' : ''}${plus} min)`;
+  meldung(`„${name}“ als ${PLATZ_TYP[typ]} übernommen${platz.abstandM >= 50 ? ` – Umweg ca. ${zahl(umwegKm(platz.abstandM), 1)} km` : ''}. ${ziel}.`, '', false, rueckgaengigAktion);
 }
 
-let platzlauf = false;
+let platzlauf = null;                       // AbortController, solange die Suche läuft
+let fehlerPlaetze = '';                     // bleibt im Pausenblock stehen, bis eine Suche gelingt
+let fehlerArten = '';                       // dasselbe für die Straßenarten, steht an der Route
+
+/** Meldung mit „Abbrechen“ für einen laufenden Abruf */
+function laufMeldung(text, abbr) { meldung(text, '', true, { text: 'Abbrechen', fn: () => abbr.abort() }); }
+
 async function plaetzeSuchen() {
   if (platzlauf) return;
   const p = store.aktuell();
@@ -310,32 +378,48 @@ async function plaetzeSuchen() {
   const laenge = trackKm(p.route);
   const vorhanden = plaetzePassen(p.route.plaetze, laenge, radius) ? p.route.plaetze : null;
   if (vorhanden && !offenePlaetze(vorhanden)) { pausenAktualisieren(); meldung('Alle Streckenstücke sind bereits abgefragt – Vorschläge aktualisiert.'); return; }
+  if (navigator.onLine === false) {
+    fehlerPlaetze = 'Kein Netz – die Platzsuche braucht eine Verbindung. Später erneut versuchen; Gefundenes bleibt gespeichert.';
+    pausenAktualisieren();
+    meldung('Kein Netz – die Platzsuche braucht eine Verbindung.', 'fehler');
+    return;
+  }
   if (erinnern('mp.overpass') !== 'ja') {
-    if (!confirm('Plätze suchen?\n\nDazu wird der Streckenverlauf (vereinfacht) in Stücken an Overpass (overpass-api.de, OpenStreetMap) gesendet. Die Zustimmung wird in diesem Browser gemerkt.')) return;
+    if (!confirm('Plätze suchen?\n\nDazu wird der Streckenverlauf deiner Planung (vereinfacht) in Stücken an einen Kartendienst (Overpass, overpass-api.de, OpenStreetMap) gesendet. Die Zustimmung wird in diesem Browser gemerkt und lässt sich unter „Planungen“ widerrufen.')) return;
     merken('mp.overpass', 'ja');
   }
-  platzlauf = true;
+  const abbr = new AbortController();
+  platzlauf = abbr;
   const id = p.id, track = p.route.track;
   const gleiche = () => { const j = store.aktuell(); return j.id === id && j.route.track === track; };
   try {
     const stand = await sucheEntlang(track, radius, {
-      vorhanden,
-      fortschritt: (fertig, gesamt, hinweis) => meldung(fertig < gesamt
-        ? `Plätze werden gesucht … Stück ${fertig + 1} von ${gesamt}${vorhanden ? ' (nur fehlende)' : ''}${hinweis ? ' – ' + hinweis : ''}` : 'Plätze werden ausgewertet …', '', true),
+      vorhanden, signal: abbr.signal,
+      fortschritt: (fertig, gesamt, hinweis) => laufMeldung(fertig < gesamt
+        ? `Plätze werden gesucht … Stück ${fertig + 1} von ${gesamt}${vorhanden ? ' (nur fehlende)' : ''}${hinweis ? ' – ' + hinweis : ''}` : 'Plätze werden ausgewertet …', abbr),
       beiStueck: (zwischen) => {
-        if (!gleiche()) throw new Error('Die Planung wurde gewechselt.');
+        if (!gleiche()) throw abbruchFehler('Die Planung wurde gewechselt.');
         store.aendernStill(pp => { pp.route.plaetze = structuredClone(zwischen); });
         pausenAktualisieren();
       }
     });
     if (!gleiche()) { meldung('Die Planung hat sich geändert – Zwischenstand verworfen.', 'fehler'); return; }
+    fehlerPlaetze = '';
     pausenAktualisieren();
     const offen = offenePlaetze(stand);
-    meldung(`${stand.liste.length} Plätze gefunden` + (offen ? ` – ${offen} Streckenstück(e) noch offen (Server überlastet); „Plätze suchen“ holt nur diese nach` : ''), offen ? 'fehler' : '');
+    meldung(`${stand.liste.length} Plätze gefunden` + (offen ? ` – ${offen} Streckenstück(e) noch offen (Kartendienst überlastet); „Plätze suchen“ holt nur diese nach` : ''), offen ? 'fehler' : '');
   } catch (err) {
-    meldung(`Die Platzsuche ist fehlgeschlagen: ${err.message}.` + (offenePlaetze(store.aktuell().route.plaetze) ? ' Bisher Gefundenes bleibt gespeichert – erneut suchen setzt fort.' : ''), 'fehler');
+    const hat = offenePlaetze(store.aktuell().route.plaetze);
+    if (err.name === 'Abbruch') {
+      const vomNutzer = err.message === 'Abgebrochen.';
+      meldung(vomNutzer ? 'Platzsuche abgebrochen – Bisheriges bleibt gespeichert, erneutes Suchen setzt fort.' : err.message, vomNutzer ? '' : 'fehler');
+    } else {
+      fehlerPlaetze = fehlerText(err) + (hat ? ' Bisher Gefundenes bleibt gespeichert – erneutes Suchen setzt fort.' : '');
+      meldung(`Die Platzsuche ist fehlgeschlagen. ${fehlerText(err)}`, 'fehler');
+    }
+    pausenAktualisieren();
   } finally {
-    platzlauf = false;
+    platzlauf = null;
   }
 }
 
@@ -380,17 +464,19 @@ function vAuftrag(p) {
       <div class="formular">${ab.felder.map(([f, nr, name]) => {
         const istAuto = AUFTRAG_AUTO.includes(f);
         const gross = ab.felder.length === 1;
+        const weicht = istAuto && String(a[f] ?? '').trim() && String(a[f]).trim() !== String(auto[f] ?? '').trim();
         return feld(`${nr ? nr + ' – ' : ''}${name}`, `auftrag.${f}`, p, {
           mehrzeilig: true, zeilen: gross ? 5 : (f === 'a3h' || f === 'a3m' || f === 'a3n' ? 3 : 2),
           klasse: gross ? 'breit' : '',
           platzhalter: istAuto ? (auto[f] ? `Automatisch: ${auto[f]}` : 'Wird aus der Planung ergänzt') : '',
-          hinweis: istAuto ? 'Leer lassen = Text aus der Planung.' : ''
+          hinweis: istAuto ? 'Leer lassen = Text aus der Planung.' : '',
+          zusatz: istAuto ? `<span class="auto-abweichung" data-auto-f="${f}" ${weicht ? '' : 'hidden'}>⚠ Von Hand eingetragen – folgt der Planung nicht mehr. <button type="button" class="knopf klein" data-aktion="auftrag-auto" data-f="${f}">Wieder automatisch</button></span>` : ''
         });
       }).join('')}</div>
     </section>`).join('');
   return `
     <h1>Marschauftrag (Fb Fü 55)</h1>
-    <p class="lead">Felder mit „Automatisch“ füllen sich aus Route, Kolonnen und Parametern. Wer etwas einträgt, überschreibt den Vorschlag.</p>
+    <p class="lead">Felder mit „Automatisch“ füllen sich aus Route, Kolonnen und Parametern. Wer etwas einträgt, überschreibt den Vorschlag – das Feld meldet dann „von Hand eingetragen“ und lässt sich mit einem Klick zurücksetzen.</p>
     <section class="block"><h2>Kopf</h2>
       <div class="formular">
         ${feld('Absender', 'auftrag.absender', p)}
@@ -489,14 +575,16 @@ function vDruck(p) {
         <span>Ortsskizzen der Marschskizze aus dem Streckenverlauf zeichnen <span class="hinweis">(aus = Felder frei, zum Einzeichnen von Hand)</span></span></label>
       <label class="feld" style="flex-direction:row;align-items:center;gap:10px;margin-top:8px">
         <input type="checkbox" data-p="druck.kartenHintergrund" data-typ="haken" ${p.druck.kartenHintergrund ? 'checked' : ''} style="width:18px;height:18px;min-height:0;accent-color:var(--thw)">
-        <span>OpenStreetMap-Karte unter die Skizzen legen <span class="hinweis">(lädt Kartenkacheln beim Drucken; aus = nur Linienzug, auch ohne Netz)</span></span></label>
+        <span>OpenStreetMap-Karte unter die Skizzen legen <span class="hinweis">(lädt Kartenkacheln von openstreetmap.org – daran ist der Streckenausschnitt erkennbar; aus = nur Linienzug, auch ohne Netz)</span></span></label>
     </section>
     <div class="leiste">
       <button type="button" class="knopf primaer" data-aktion="drucken" id="druck-los">Ausgewählte Blätter drucken / als PDF speichern</button>
       <button type="button" class="knopf" data-aktion="auswahl-plan">Nur Planung</button>
       <button type="button" class="knopf" data-aktion="auswahl-alle">Alle</button>
       <button type="button" class="knopf" data-aktion="auswahl-keine">Keine</button>
+      <button type="button" class="knopf" data-aktion="sichern" title="Die ganze Planung als Datei speichern – die einzige Kopie liegt sonst nur in diesem Browser">Planung als Datei sichern</button>
     </div>
+    ${/^((?!chrome|android|crios|fxios).)*safari/i.test(navigator.userAgent) ? '<div class="vorgabe-hinweis">Safari setzt Hoch- und Querformat im Druckdialog nicht zuverlässig: Vor dem Drucken die Seitenvorschau prüfen, sonst die Ausrichtung dort von Hand wählen oder Chrome/Firefox nutzen.</div>' : ''}
     <div class="anleitung"><strong>PDF erzeugen:</strong>
       <ol><li>„Drucken“ wählen.</li><li>Im Druckdialog als Ziel „Als PDF speichern“ einstellen.</li><li>Papierformat A4, Skalierung „Standard“ bzw. 100 %, Ränder „Standard“. Kopf- und Fußzeilen des Browsers ausschalten.</li></ol></div>`;
 }
@@ -536,6 +624,7 @@ function render() {
   if (karte) { karte.entfernen(); karte = null; }
   editor.innerHTML = a.html(p);
   editor.dataset.ansicht = ansicht;
+  editor.querySelectorAll('input[type="number"]').forEach(pruefeFeld);
   a.nach?.(p);
   renderNav();
   renderChips();
@@ -548,12 +637,21 @@ function nachRoute(p) {
   try {
     karte = karteErzeugen($('#karte'), {
       beiKpVerschoben(id, lage) {
-        store.aendern(pp => { kpAnTrackSetzen(pp, id, lage); });
+        const p = store.aktuell();
+        const kp = p.route.kontrollpunkte.find(k => k.id === id);
+        if (kp?.abseits && !confirm(`Punkt „${kp.ort || 'Platz'}“ liegt abseits der Strecke (Umweg ca. ${zahl(kp.umwegKm || 0, 1)} km).\n\nVerschieben legt ihn auf die Strecke und entfernt den Umweg aus dem Fahrplan. Fortfahren?`)) {
+          karte?.neuZeichnen(p);                           // Marker zurück an seinen Platz
+          return;
+        }
+        store.aendern(pp => { kpAnTrackSetzen(pp, id, lage); }, null, 'Punkt verschoben');
         routeAktualisieren();
+        const sortiert = sortierteKp(store.aktuell().route);
+        const nr = sortiert.findIndex(k => k.id === id) + 1;
+        if (nr) meldung(`Punkt ${nr} auf km ${zahl(sortiert[nr - 1].km, 1)} verschoben.`, '', false, rueckgaengigAktion);
       },
       beiPlatz(platz, typ) { platzNehmen(platz.id, typ); },
       beiKpSetzen(km) {
-        store.aendern(pp => { kpHinzufuegen(pp, km, 'kp'); });
+        store.aendern(pp => { kpHinzufuegen(pp, km, 'kp'); }, null, 'Kontrollpunkt gesetzt');
         routeAktualisieren();
       }
     });
@@ -572,11 +670,11 @@ function nachRoute(p) {
 /* ---------- Navigation und Kopf ---------- */
 
 function renderNav() {
-  const probleme = pruefung(store.aktuell());
-  const fehler = probleme.filter(x => x.stufe === 'fehler').length;
+  const probleme = pruefung(store.aktuell()).filter(x => x.stufe !== 'hinweis');
   nav.innerHTML = ANSICHTEN.map((a, i) => {
-    const marke = a.id === 'druck' && probleme.length
-      ? `<span class="nav-marke ${fehler ? 'fehler' : ''}" title="${probleme.length} Hinweis(e)">${probleme.length}</span>` : '';
+    const betrifft = probleme.filter(x => a.id === 'druck' || x.ansicht === a.id);       // „Drucken“ zählt alles
+    const marke = betrifft.length
+      ? `<span class="nav-marke ${betrifft.some(x => x.stufe === 'fehler') ? 'fehler' : ''}" title="${betrifft.length} Hinweis(e) – siehe Prüfung unter „Drucken“">${betrifft.length}</span>` : '';
     return `<button type="button" class="nav-punkt" data-aktion="gehe" data-ziel="${a.id}" ${a.id === ansicht ? 'aria-current="page"' : ''}>
       <span class="nav-nr">${i + 1}</span><span>${e(a.titel)}</span>${marke}</button>`;
   }).join('');
@@ -594,13 +692,21 @@ function kopfAktualisieren() {
   document.title = `${p.name || 'Marschplanung'} – Marschplaner`;
   $('#b-undo').disabled = !store.kannRueckgaengig();
   $('#b-redo').disabled = !store.kannWiederholen();
+  $('#b-undo').title = store.kannRueckgaengig() ? `Rückgängig: ${store.rueckgaengigText() || 'letzte Änderung'} (Strg+Z)` : 'Nichts zum Rückgängigmachen';
+  $('#b-redo').title = store.kannWiederholen() ? `Wiederholen: ${store.wiederholenText() || 'letzte Änderung'} (Strg+Umschalt+Z)` : 'Nichts zum Wiederholen';
   speicherstandAktualisieren();
 }
 
 function speicherstandAktualisieren() {
   const s = $('#speicherstand');
   if (store.speicherProbleme()) { s.textContent = '⚠ nicht gespeichert'; s.className = 'speicherstand fehler'; }
-  else { s.textContent = 'Im Browser gespeichert'; s.className = 'speicherstand'; }
+  else {
+    const p = store.aktuell();
+    s.textContent = `Im Browser gespeichert · ${sicherungText(p)}`;
+    const alt = !store.gesichertAm(p.id) || Date.now() - Date.parse(store.gesichertAm(p.id)) > 7 * 864e5;
+    s.className = `speicherstand${alt ? ' alt' : ''}`;
+    s.title = 'Die Planung liegt nur in diesem Browser. „Planungen → Als Datei sichern“ legt eine Kopie an, die auch ein Browser-Reset oder ein anderer Rechner übersteht.';
+  }
 }
 
 /* ---------- Vorschau ---------- */
@@ -650,14 +756,20 @@ function abgeleitetAktualisieren() {
     const fp = fahrplan(p, p.kolonnen[0] ?? null);
     for (const z of fp.zeilen) {
       const zelle = editor.querySelector(`[data-an="${z.kp.id}"]`);
-      if (zelle) zelle.textContent = z.halt > 0 ? `${zeitText(z.an)} – ${zeitText(z.ab)}` : zeitText(z.an);
+      if (zelle) zelle.textContent = fp.ablaufFehlt ? '–' : (z.halt > 0 ? `${zeitText(z.an)} – ${zeitText(z.ab)}` : zeitText(z.an));
     }
     const info = $('#route-info');
     if (info) {
       const hat = p.route.track.length > 1;
       info.innerHTML = hat
-        ? `<strong>${e(p.route.name || 'Route')}</strong> · Track ${zahl(trackKm(p.route), 1)} km · ${p.route.track.length} Stützpunkte · ${p.route.kontrollpunkte.length} Kontrollpunkte${p.route.arten ? (offeneStuecke(p.route.arten) ? ` · Straßenarten teilweise (${offeneStuecke(p.route.arten)} Stück(e) offen)` : ' · Straßenarten aus OSM') : ''}${fp.zeilen.length > 1 ? ` · Marschzeit ${dauerText(fp.ende - fp.start)}` : ''}`
+        ? `<strong>${e(p.route.name || 'Route')}</strong> · Strecke ${zahl(trackKm(p.route), 1)} km (${p.route.track.length} Punkte im Verlauf) · ${p.route.kontrollpunkte.length} Kontrollpunkte${p.route.arten ? (offeneStuecke(p.route.arten) ? ` · Straßenarten teilweise (${offeneStuecke(p.route.arten)} Stück(e) offen)` : ' · Straßenarten aus Kartendaten (OSM)') : ''}${fp.zeilen.length > 1 ? ` · Marschzeit ${dauerText(fp.ende - fp.start)}` : ''}`
         : `Kein Streckenverlauf geladen${p.route.kontrollpunkte.length ? ` · ${p.route.kontrollpunkte.length} Kontrollpunkte von Hand` : ''}.`;
+      const warn = [];
+      if (fp.ablaufFehlt) warn.push('⚠ Die Ablaufzeit fehlt – Ankunftszeiten sind nicht verfügbar. <button type="button" class="knopf klein" data-aktion="gehe" data-ziel="eckdaten">Eckdaten öffnen</button>');
+      if (hat && (!p.route.arten || offeneStuecke(p.route.arten))) {
+        warn.push(`⚠ ${p.route.arten ? 'Straßenarten nur teilweise ermittelt' : 'Straßenarten nicht ermittelt'} – nicht ermittelte Abschnitte rechnen mit der eingetragenen Straßenart (Vorgabe Bundes-/Landstraße), die Fahrzeiten können abweichen.${fehlerArten ? ' ' + e(fehlerArten) : ''} <button type="button" class="knopf klein" data-aktion="strassenarten">${p.route.arten ? 'Fehlende nachholen' : 'Jetzt ermitteln'}</button>`);
+      }
+      info.innerHTML += warn.map(w => `<div class="vorgabe-hinweis fehler" style="margin:8px 0 0">${w}</div>`).join('');
     }
   }
 
@@ -677,6 +789,14 @@ function abgeleitetAktualisieren() {
       const konf = pruefung(p).filter(x => x.ansicht === 'kolonnen' && /zugleich/.test(x.text));
       w.innerHTML = konf.length ? meldungsListe(konf, false) : '';
     }
+  }
+
+  if (ansicht === 'auftrag') {
+    const auto = autoAuftrag(p);
+    editor.querySelectorAll('[data-auto-f]').forEach(el => {
+      const f = el.dataset.autoF;
+      el.hidden = !(String(p.auftrag[f] ?? '').trim() && String(p.auftrag[f]).trim() !== String(auto[f] ?? '').trim());
+    });
   }
 
   if (ansicht === 'hilfsmittel') {
@@ -711,7 +831,18 @@ editor.addEventListener('input', ev => {
     wert = el.value === '' || Number.isNaN(n) ? '' : n;
   } else wert = el.value;
   store.aendern(p => store.setzePfad(p, pfad, wert), pfad);
+  pruefeFeld(el);
 });
+
+/** Markiert eine Zahl außerhalb des erlaubten Bereichs am Feld – sie wird gespeichert, aber nicht stillschweigend hingenommen */
+function pruefeFeld(el) {
+  if (el.type !== 'number') return;
+  const schlecht = !!el.validity && (el.validity.rangeUnderflow || el.validity.rangeOverflow || el.validity.badInput);
+  el.classList.toggle('ungueltig', schlecht);
+  el.setAttribute('aria-invalid', schlecht ? 'true' : 'false');
+  el.dataset.titel0 ??= el.title || '';
+  el.title = schlecht ? `Außerhalb des erlaubten Bereichs (${el.min !== '' ? el.min : '…'} bis ${el.max !== '' ? el.max : '…'})` : el.dataset.titel0;
+}
 
 editor.addEventListener('change', ev => {
   const el = ev.target;
@@ -747,6 +878,8 @@ $('#projektname').addEventListener('input', ev => {
    Aktionen
    ==================================================================== */
 
+const typName = (typ) => TYP_NAME[typ] || '';
+
 const AKTIONEN = {
   gehe(el) { gehe(el.dataset.ziel); },
 
@@ -754,11 +887,13 @@ const AKTIONEN = {
 
   beispiel() {
     const p = store.aktuell();
-    const leer = !p.route.kontrollpunkte.length;
-    if (!leer && !confirm('Das Beispiel ersetzt Route, Kolonnen und Eckdaten dieser Planung. Fortfahren?')) return;
-    store.aendern(pp => { beispielFuellen(pp, leseGpx); });
+    const leer = !p.route.kontrollpunkte.length && !p.route.track.length
+      && Object.values(p.kopf).every(v => !v)
+      && p.kolonnen.every(k => !((k.einzel || 0) + (k.gespanne || 0)) && !k.marschfolge);
+    if (!leer && !confirm('Das Beispiel ersetzt Route, Kolonnen und Eckdaten dieser Planung. Fortfahren?\n\n(Unter „Planungen → Beispiel“ lässt es sich stattdessen als eigene Planung anlegen.)')) return;
+    store.aendern(pp => { beispielFuellen(pp, leseGpx); }, null, 'Beispiel geladen');
     render();
-    meldung('Beispielplanung geladen – Schematische Route, keine echten Straßen.');
+    meldung('Beispielplanung geladen – Schematische Route, keine echten Straßen.', '', false, leer ? null : rueckgaengigAktion);
   },
 
   'kp-neu'() {
@@ -776,13 +911,47 @@ const AKTIONEN = {
   },
 
   'kp-loeschen'(el) {
-    store.aendern(p => kpEntfernen(p, el.dataset.id));
+    const kps = sortierteKp(store.aktuell().route);
+    const i = kps.findIndex(k => k.id === el.dataset.id);
+    const kp = kps[i];
+    if (!kp) return;
+    const bezeichnung = `Punkt ${i + 1}${kp.ort ? ` („${kp.ort}“)` : ''}`;
+    const rolle = kp.typ === 'ablauf' ? 'Ablaufpunkt' : kp.typ === 'ziel' ? 'Zielpunkt' : '';
+    if (rolle && !confirm(`${bezeichnung} ist der ${rolle}. Wirklich entfernen?\n\nDer nächste Punkt übernimmt dann diese Rolle; die Zeiten verschieben sich.`)) return;
+    store.aendern(p => kpEntfernen(p, kp.id), null, `${bezeichnung} entfernt`);
     routeAktualisieren();
+    meldung(`${bezeichnung} entfernt.`, '', false, rueckgaengigAktion);
   },
 
   'route-loeschen'() {
-    if (!confirm('Streckenverlauf und alle Kontrollpunkte dieser Planung entfernen?')) return;
-    store.aendern(p => routeLoeschen(p));
+    const p = store.aktuell();
+    const n = p.route.kontrollpunkte.length;
+    const mit = [p.route.arten && 'die ermittelten Straßenarten', p.route.plaetze && 'die gefundenen Plätze'].filter(Boolean);
+    if (!confirm(`Streckenverlauf und ${n} Kontrollpunkt(e) dieser Planung entfernen?${mit.length ? `\n\nAuch ${mit.join(' und ')} gehen weg; die Abfragen bei OpenStreetMap müssten neu laufen.` : ''}\n\nMit „Rückgängig“ lässt sich das zurückholen.`)) return;
+    store.aendern(pp => routeLoeschen(pp), null, 'Route entfernt');
+    render();
+    meldung('Route entfernt.', '', false, rueckgaengigAktion);
+  },
+
+  'gpx-export'() {
+    const p = store.aktuell();
+    if (p.route.track.length < 2) { meldung('Keine Strecke zum Exportieren – zuerst eine Route laden.', 'fehler'); return; }
+    const punkte = sortierteKp(p.route).map((k, i) => {
+      const lage = k.abseits ? [k.abseits.lat, k.abseits.lon] : punktBeiKm(p.route.track, k.km);
+      return lage && {
+        name: `${i + 1} ${k.ort || typName(k.typ)}`, lat: lage[0], lon: lage[1],
+        text: [typName(k.typ), k.bemerkung].filter(Boolean).join(', ')
+      };
+    }).filter(Boolean);
+    download(`${pdfName(p)}.gpx`, schreibeGpx({ name: p.route.name || p.name, track: p.route.track, punkte }), 'application/gpx+xml');
+    meldung(`GPX-Datei mit Strecke und ${punkte.length} Punkten gespeichert.`);
+  },
+
+  sichern() { planungSichern(); },
+
+  'auftrag-auto'(el) {
+    const f = el.dataset.f;
+    store.aendern(p => { p.auftrag[f] = ''; }, null, 'Auftragsfeld wieder automatisch');
     render();
   },
 
@@ -814,8 +983,10 @@ const AKTIONEN = {
   'k-weg'(el) {
     const p = store.aktuell();
     if (p.kolonnen.length < 2) return;
-    store.aendern(pp => { pp.kolonnen = pp.kolonnen.filter(k => k.id !== el.dataset.id); });
+    const name = p.kolonnen.find(k => k.id === el.dataset.id)?.name || 'Kolonne';
+    store.aendern(pp => { pp.kolonnen = pp.kolonnen.filter(k => k.id !== el.dataset.id); }, null, `${name} entfernt`);
     render();
+    meldung(`${name} entfernt.`, '', false, rueckgaengigAktion);
   },
 
   'u-neu'() {
@@ -824,8 +995,9 @@ const AKTIONEN = {
     editor.querySelector('[data-u]:last-of-type')?.closest('tbody')?.lastElementChild?.querySelector('input[type=text]')?.focus();
   },
   'u-weg'(el) {
-    store.aendern(p => { p.unterlagen.zeilen = p.unterlagen.zeilen.filter(z => z.id !== el.dataset.id); });
+    store.aendern(p => { p.unterlagen.zeilen = p.unterlagen.zeilen.filter(z => z.id !== el.dataset.id); }, null, 'Unterlage entfernt');
     render();
+    meldung('Unterlage entfernt.', '', false, rueckgaengigAktion);
   },
   'u-standard'() {
     if (!confirm('Die Unterlagenverteilung auf die Vorlage zurücksetzen? Eigene Änderungen gehen verloren.')) return;
@@ -866,10 +1038,22 @@ async function drucke() {
   const p = store.aktuell();
   const ids = BLAETTER.filter(b => druckAuswahl.has(b.id)).map(b => b.id);
   if (!ids.length) { meldung('Bitte mindestens ein Blatt auswählen.', 'fehler'); return; }
-  const probleme = pruefung(p).filter(x => x.stufe === 'fehler');
-  if (probleme.length && !confirm(`Die Planung ist noch unvollständig:\n\n• ${probleme.map(x => x.text).join('\n• ')}\n\nTrotzdem drucken?`)) return;
-  if (p.druck.kartenHintergrund && ids.includes('marschskizze')) meldung('Kartenausschnitte werden geladen …', '', true);
-  await drucken(ids, p);
+  const probleme = pruefung(p).filter(x => x.stufe !== 'hinweis');
+  if (probleme.length) {
+    const fehler = probleme.some(x => x.stufe === 'fehler');
+    const liste = probleme.slice(0, 8).map(x => `• ${x.text}`).join('\n') + (probleme.length > 8 ? `\n• … und ${probleme.length - 8} weitere` : '');
+    if (!confirm(`${fehler ? 'Die Planung ist noch unvollständig' : 'Die Planung hat Auffälligkeiten'}:\n\n${liste}\n\nTrotzdem drucken?`)) return;
+  }
+  let pDruck = p;
+  if (p.druck.kartenHintergrund && ids.includes('marschskizze') && erinnern('mp.kacheln') !== 'ja') {
+    if (confirm('Kartenhintergrund laden?\n\nDazu lädt dein Browser Kartenkacheln von tile.openstreetmap.org. Daran lässt sich erkennen, welchen Ausschnitt – also welche Strecke – du druckst. Die Zustimmung wird in diesem Browser gemerkt und lässt sich unter „Planungen“ widerrufen.\n\nOK = mit Karte\nAbbrechen = ohne Karte (nur Linienzug)')) merken('mp.kacheln', 'ja');
+    else pDruck = ohneKarte(p);
+  }
+  if (pDruck.druck.kartenHintergrund && ids.includes('marschskizze')) meldung('Kartenausschnitte werden geladen …', '', true);
+  await drucken(ids, pDruck, {
+    beiFehlenden: async ({ gesamt, fehlend }) => (confirm(
+      `${fehlend} von ${gesamt} Kartenkacheln konnten nicht geladen werden (kein oder langsames Netz).\n\nOK = ohne Kartenhintergrund drucken (nur Linienzug, immer lesbar)\nAbbrechen = Druck abbrechen und später erneut versuchen`) ? 'ohne' : 'abbruch')
+  });
   $('#toast').className = 'toast';
 }
 
@@ -915,17 +1099,18 @@ async function gpxLaden(datei) {
     return;
   }
   const p = store.aktuell();
-  if (p.route.kontrollpunkte.length && !confirm('Die vorhandene Route und alle Kontrollpunkte werden durch die GPX-Datei ersetzt. Fortfahren?')) return;
+  const ersetzt = p.route.kontrollpunkte.length > 0;
+  if (ersetzt && !confirm('Die vorhandene Route und alle Kontrollpunkte – auch von Hand ergänzte Halte, Ortsnamen und Bemerkungen – werden durch die GPX-Datei ersetzt.\n\nMit „Rückgängig“ lässt sich das zurückholen. Fortfahren?')) return;
   let ergebnis;
   try {
-    store.aendern(pp => { ergebnis = routeAusGpx(pp, gpx); });
+    store.aendern(pp => { ergebnis = routeAusGpx(pp, gpx); }, null, 'GPX-Route geladen');
   } catch (err) {
     meldung(err.message, 'fehler');
     return;
   }
   if (ansicht !== 'route') gehe('route'); else render();
   const extra = ergebnis.verworfen ? ` · ${ergebnis.verworfen} Wegpunkt(e) weit abseits der Strecke ignoriert` : '';
-  meldung(`Route geladen: ${zahl(ergebnis.laengeKm, 1)} km, ${ergebnis.punkte} Kontrollpunkte${extra}`);
+  meldung(`Route geladen: ${zahl(ergebnis.laengeKm, 1)} km, ${ergebnis.punkte} Kontrollpunkte${extra}`, '', false, ersetzt ? rueckgaengigAktion : null);
   strassenartenErmitteln({ automatisch: true });
 }
 
@@ -947,42 +1132,52 @@ addEventListener('drop', async ev => {
 
 /* ---------- Ortsnamen (optional, mit Rückfrage) ---------- */
 
-let ortslauf = false;
+let ortslauf = null;
 async function orteErmitteln() {
   if (ortslauf) return;
   const p = store.aktuell();
   const ziele = sortierteKp(p.route).filter(k => !k.ort && kpPosition(p.route, k));
   if (!ziele.length) { meldung('Alle Kontrollpunkte haben bereits einen Ortsnamen.'); return; }
+  if (navigator.onLine === false) { meldung('Kein Netz – Ortsnamen später ermitteln oder von Hand eintragen.', 'fehler'); return; }
   if (!confirm(`Für ${ziele.length} Punkt(e) wird der Ortsname bei OpenStreetMap (nominatim.openstreetmap.org) abgefragt. Dabei werden deren Koordinaten übertragen. Fortfahren?`)) return;
-  ortslauf = true;
-  let gefunden = 0;
+  const abbr = new AbortController();
+  ortslauf = abbr;
+  let gefunden = 0, fehler = 0, letzter = null;
   try {
     for (const [i, kp] of ziele.entries()) {
-      meldung(`Ortsnamen: ${i + 1} von ${ziele.length} …`);
+      if (abbr.signal.aborted) throw abbruchFehler();
+      laufMeldung(`Ortsnamen: ${i + 1} von ${ziele.length} …`, abbr);
       const lage = kpPosition(store.aktuell().route, kp);
       const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&accept-language=de&lat=${lage[0].toFixed(5)}&lon=${lage[1].toFixed(5)}`;
-      const antwort = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!antwort.ok) throw new Error(`Der Dienst antwortet mit ${antwort.status}.`);
-      const a = (await antwort.json()).address || {};
-      const name = a.city || a.town || a.village || a.municipality || a.suburb || a.county || '';
-      if (name) {
-        store.aendern(pp => { const k = pp.route.kontrollpunkte.find(x => x.id === kp.id); if (k && !k.ort) k.ort = name; });
-        gefunden++;
-        if (ansicht === 'route') routeAktualisieren();
+      try {
+        const antwort = await fetch(url, { headers: { Accept: 'application/json' }, signal: zeitgrenze(15000, abbr.signal) });
+        if (!antwort.ok) throw new Error(`antwortet mit ${antwort.status}`);
+        const a = (await antwort.json()).address || {};
+        const name = a.city || a.town || a.village || a.municipality || a.suburb || a.county || '';
+        if (name) {
+          store.aendern(pp => { const k = pp.route.kontrollpunkte.find(x => x.id === kp.id); if (k && !k.ort) k.ort = name; }, null, 'Ortsname ergänzt');
+          gefunden++;
+          if (ansicht === 'route') routeAktualisieren();
+        }
+      } catch (err) {
+        if (abbr.signal.aborted) throw abbruchFehler();
+        fehler++; letzter = err;                        // ein Punkt darf fehlen, die übrigen zählen
+        if (fehler >= 3 && !gefunden) throw letzter;      // dreimal in Folge nichts: der Dienst ist nicht erreichbar
       }
-      if (i < ziele.length - 1) await new Promise(r => setTimeout(r, 1100));     // Nutzungsrichtlinie: höchstens 1 Anfrage/s
+      if (i < ziele.length - 1) await schlafen(1100, abbr.signal);     // Nutzungsrichtlinie: höchstens 1 Anfrage/s
     }
-    meldung(`${gefunden} von ${ziele.length} Ortsnamen ergänzt – bitte prüfen.`);
+    meldung(`${gefunden} von ${ziele.length} Ortsnamen ergänzt – bitte prüfen.${fehler ? ` ${fehler} Abfrage(n) schlugen fehl; die übrigen Namen von Hand eintragen oder erneut ermitteln.` : ''}`, fehler ? 'fehler' : '');
   } catch (err) {
-    meldung(`Ortsnamen konnten nicht abgefragt werden: ${err.message}`, 'fehler');
+    if (err.name === 'Abbruch') meldung(`Ortsnamen abgebrochen – ${gefunden} ergänzt.`);
+    else meldung(`Ortsnamen konnten nicht abgefragt werden. ${fehlerText(letzter || err)} Die Namen lassen sich auch von Hand eintragen.`, 'fehler');
   } finally {
-    ortslauf = false;
+    ortslauf = null;
   }
 }
 
 /* ---------- Straßenarten aus OpenStreetMap ---------- */
 
-let artenlauf = false;
+let artenlauf = null;
 async function strassenartenErmitteln({ automatisch = false } = {}) {
   if (artenlauf) return;
   const p = store.aktuell();
@@ -996,49 +1191,73 @@ async function strassenartenErmitteln({ automatisch = false } = {}) {
     vorhanden = null;
   }
 
+  if (navigator.onLine === false) {
+    fehlerArten = 'Kein Netz – später erneut ermitteln.';
+    if (ansicht === 'route') routeAktualisieren();
+    meldung(`Kein Netz – die Straßenarten brauchen eine Verbindung.${automatisch ? ' Alle Abschnitte gelten bis dahin als Bundes-/Landstraße.' : ''}`, 'fehler');
+    return;
+  }
   if (erinnern('mp.overpass') !== 'ja') {
-    const ok = confirm('Straßenarten erkennen?\n\nDazu wird der Streckenverlauf (vereinfacht) in Stücken an Overpass (overpass-api.de, OpenStreetMap) gesendet, um die Straßen entlang der Route abzufragen. Die Zustimmung wird in diesem Browser gemerkt.\n\nOhne Zustimmung rechnet der Marschplaner alle Abschnitte als Bundes-/Landstraße; die Straßenart lässt sich dann von Hand setzen.');
-    if (!ok) { if (automatisch) meldung('Straßenarten nicht ermittelt – alle Abschnitte gelten als Bundes-/Landstraße.'); return; }
+    const ok = confirm('Straßenarten erkennen?\n\nDazu wird der Streckenverlauf deiner Planung (vereinfacht) in Stücken an einen Kartendienst (Overpass, overpass-api.de, OpenStreetMap) gesendet, um die Straßen entlang der Route abzufragen. Die Zustimmung wird in diesem Browser gemerkt und lässt sich unter „Planungen“ widerrufen.\n\nOhne Zustimmung rechnet der Marschplaner alle Abschnitte als Bundes-/Landstraße; die Straßenart lässt sich dann von Hand setzen.');
+    if (!ok) { fehlerArten = ''; if (automatisch) meldung('Straßenarten nicht ermittelt – alle Abschnitte gelten als Bundes-/Landstraße.'); if (ansicht === 'route') routeAktualisieren(); return; }
     merken('mp.overpass', 'ja');
   }
 
-  artenlauf = true;
+  // Beim ersten Ermitteln stellen alle Abschnitte auf „Auto (OSM)“ um – von Hand gesetzte Arten nicht ohne Rückfrage
+  const frisch = !passtZu(p.route.arten, laenge);
+  let handBehalten = false;
+  if (frisch) {
+    const hand = handArten(p);
+    if (hand > 0) handBehalten = !confirm(`${hand} Abschnitt(e) haben eine von Hand gesetzte Straßenart (BAB/Ort).\n\nOK = durch die Straßenarten aus den Kartendaten ersetzen\nAbbrechen = von Hand gesetzte behalten (nur die übrigen Abschnitte rechnen nach Kartendaten)`);
+    store.aendern(() => {}, null, 'Straßenarten ermittelt');            // ein Rückgängig-Schritt für das Umstellen
+  }
+  let umgestellt = !frisch;
+
+  const abbr = new AbortController();
+  artenlauf = abbr;
   const id = p.id, track = p.route.track;
   const gleichePlanung = () => { const j = store.aktuell(); return j.id === id && j.route.track === track; };
   try {
     const arten = await analysiere(track, {
-      vorhanden,
+      vorhanden, signal: abbr.signal,
       fortschritt: (fertig, gesamt, hinweis) => {
         const offen = vorhanden ? ` (nur fehlende Stücke)` : '';
-        meldung(fertig < gesamt
-          ? `Straßenarten werden bei OpenStreetMap abgefragt … Stück ${fertig + 1} von ${gesamt}${offen}${hinweis ? ' – ' + hinweis : ''}`
-          : 'Straßenarten werden ausgewertet …', '', true);
+        laufMeldung(fertig < gesamt
+          ? `Straßenarten werden abgefragt … Stück ${fertig + 1} von ${gesamt}${offen}${hinweis ? ' – ' + hinweis : ''}`
+          : 'Straßenarten werden ausgewertet …', abbr);
       },
       beiStueck: (zwischenstand) => {                       // jedes fertige Stück sofort sichern
-        if (!gleichePlanung()) throw new Error('Die Planung wurde gewechselt.');
-        const neuAngelegt = !passtZu(store.aktuell().route.arten, laenge);
+        if (!gleichePlanung()) throw abbruchFehler('Die Planung wurde gewechselt.');
         store.aendernStill(pp => {
           pp.route.arten = structuredClone(zwischenstand);
-          if (neuAngelegt) artenUebernehmen(pp, pp.route.arten);
+          if (!umgestellt) { artenUebernehmen(pp, pp.route.arten, { handBehalten }); umgestellt = true; }
         });
         if (ansicht === 'route') { routeAktualisieren(); }
       }
     });
     if (!gleichePlanung()) { meldung('Die Planung hat sich während der Abfrage geändert – Zwischenstand verworfen.', 'fehler'); return; }
+    fehlerArten = '';
     if (ansicht === 'route') { routeAktualisieren(); renderNav(); }
     const km = trackKm(store.aktuell().route);
     const a = anteileImAbschnitt(arten, 0, km);
     const offen = offeneStuecke(arten);
     const text = `Straßenarten: BAB ${zahl(a.anteile.bab, 0)} km · BuL ${zahl(a.anteile.bul, 0)} km · Ort ${zahl(a.anteile.ort, 0)} km`
-      + (offen ? ` – ${offen} von ${arten.fertig.length} Streckenstücken noch offen (Server überlastet); „Straßenarten neu ermitteln“ holt nur diese nach` : '')
+      + (offen ? ` – ${offen} von ${arten.fertig.length} Streckenstücken noch offen (Kartendienst überlastet); „Straßenarten neu ermitteln“ holt nur diese nach` : '')
       + (!offen && a.unbekannt > km * 0.1 ? ` – für ${zahl(a.unbekannt, 0)} km fand OSM keine Straße nahe der Route (zählt als BuL)` : '');
     meldung(text, offen || a.unbekannt > km * 0.1 ? 'fehler' : '');
   } catch (err) {
     const offen = offeneStuecke(store.aktuell().route.arten);
-    meldung(`Straßenarten konnten nicht abgefragt werden: ${err.message}.` + (offen
-      ? ` Bisher Ermitteltes bleibt gespeichert – „Straßenarten neu ermitteln“ setzt fort.` : ' Die Abschnitte gelten bis dahin als Bundes-/Landstraße.'), 'fehler');
+    if (err.name === 'Abbruch') {
+      const vomNutzer = err.message === 'Abgebrochen.';
+      meldung(vomNutzer ? 'Abgebrochen – Bisheriges bleibt gespeichert, „Straßenarten neu ermitteln“ setzt fort.' : err.message, vomNutzer ? '' : 'fehler');
+    } else {
+      fehlerArten = fehlerText(err);
+      meldung(`Straßenarten konnten nicht abgefragt werden. ${fehlerText(err)}` + (offen
+        ? ` Bisher Ermitteltes bleibt gespeichert – „Straßenarten neu ermitteln“ setzt fort.` : ' Die Abschnitte gelten bis dahin als Bundes-/Landstraße.'), 'fehler');
+    }
+    if (ansicht === 'route') routeAktualisieren();
   } finally {
-    artenlauf = false;
+    artenlauf = null;
   }
 }
 
@@ -1046,21 +1265,38 @@ async function strassenartenErmitteln({ automatisch = false } = {}) {
 
 async function planungLesen(datei) {
   try {
-    store.ausJson(await datei.text());
-    meldung('Planung geladen.');
+    const p = store.ausJson(await datei.text());
+    meldung(`Neue Planung „${p.name}“ angelegt – die bisherige Planung bleibt unverändert und ist unter „Planungen“ wieder da.`);
   } catch (err) {
     meldung(err.message, 'fehler');
   }
 }
+
+function planungSichern() {
+  const p = store.aktuell();
+  download(`${pdfName(p)}.marschplan.json`, store.alsJson(), 'application/json');
+  store.gesichertMarkieren(p.id);
+  meldung('Planung als Datei gesichert.');
+}
+
+const datumKurz = (iso) => (iso || '').slice(0, 10).split('-').reverse().join('.');
 
 function projektDialog() {
   const d = $('#dialog');
   const akt = store.aktuell();
   const zeilen = store.liste().map(x => `<li class="${x.id === akt.id ? 'aktiv' : ''}">
     <span class="name" title="${e(x.name)}">${e(x.name || 'Ohne Namen')}</span>
-    <span class="meta">${e((x.geaendert || '').slice(0, 10).split('-').reverse().join('.'))}</span>
+    <span class="meta">${e(datumKurz(x.geaendert))} · ${x.punkte} Punkte</span>
     ${x.id === akt.id ? '<span class="meta">geöffnet</span>' : `<button type="button" class="knopf klein" data-p-oeffnen="${x.id}">Öffnen</button>`}
-    <button type="button" class="knopf klein gefahr nur-symbol" data-p-weg="${x.id}" aria-label="Planung löschen" title="Löschen">✕</button></li>`).join('');
+    <button type="button" class="knopf klein gefahr nur-symbol abstand-links" data-p-weg="${x.id}" aria-label="Planung löschen (landet im Papierkorb)" title="Löschen – die Planung landet im Papierkorb">✕</button></li>`).join('');
+  const korb = store.papierkorbListe().map(x => `<li>
+    <span class="name" title="${e(x.name)}">${e(x.name || 'Ohne Namen')}</span>
+    <span class="meta">gelöscht ${e(datumKurz(x.geloeschtAm))} · ${x.punkte} Punkte</span>
+    <button type="button" class="knopf klein" data-p-zurueck="${x.id}">Wiederherstellen</button></li>`).join('');
+  const zustimmung = (schluessel, name, was) => `<li>
+    <span class="name" title="${e(was)}">${e(name)}</span>
+    <span class="meta">${erinnern(schluessel) === 'ja' ? 'erteilt' : 'nicht erteilt'}</span>
+    ${erinnern(schluessel) === 'ja' ? `<button type="button" class="knopf klein" data-p-widerruf="${schluessel}">Widerrufen</button>` : ''}</li>`;
   d.innerHTML = `
     <div class="dialog-kopf"><h2>Planungen</h2><button type="button" class="knopf klein" data-p-zu>Schließen</button></div>
     <div class="dialog-inhalt">
@@ -1070,13 +1306,22 @@ function projektDialog() {
         <button type="button" class="knopf" data-p-dup>Duplizieren</button>
         <button type="button" class="knopf" data-p-beispiel>Beispiel</button>
       </div>
+      ${korb ? `<h3 style="font-size:14px;margin:14px 0 8px">Zuletzt gelöscht</h3>
+        <p class="hinweis" style="margin:0 0 8px">Die letzten gelöschten Planungen bleiben hier erhalten.</p>
+        <ul class="projektliste">${korb}</ul>` : ''}
       <h3 style="font-size:14px;margin:14px 0 8px">Sichern und weitergeben</h3>
-      <p class="hinweis" style="margin:0 0 8px">Planungen liegen nur in diesem Browser. Zum Sichern oder Weitergeben als Datei speichern – sie lässt sich hier wieder laden.</p>
+      <p class="hinweis" style="margin:0 0 8px">Planungen liegen nur in diesem Browser – ein Browser-Reset oder ein anderer Rechner kennt sie nicht. Zum Sichern oder Weitergeben als Datei speichern; sie lässt sich hier wieder laden. Aktuelle Planung: ${e(sicherungText(akt))}.</p>
       <div class="leiste">
         <button type="button" class="knopf" data-p-export>Als Datei sichern (.json)</button>
         <button type="button" class="knopf" data-p-import>Datei laden …</button>
         <input type="file" id="p-datei" accept=".json,application/json" hidden>
       </div>
+      <h3 style="font-size:14px;margin:14px 0 8px">Datenübertragung</h3>
+      <p class="hinweis" style="margin:0 0 8px">Sonst bleibt alles auf diesem Gerät. Diese Zustimmungen werden in diesem Browser gemerkt; nach dem Widerruf fragt der Marschplaner wieder nach.</p>
+      <ul class="projektliste">
+        ${zustimmung('mp.overpass', 'Straßen- und Platzsuche (Overpass, OpenStreetMap)', 'Der vereinfachte Streckenverlauf wird in Stücken an overpass-api.de gesendet.')}
+        ${zustimmung('mp.kacheln', 'Kartenhintergrund beim Drucken (openstreetmap.org)', 'Der Browser lädt Kartenkacheln; daraus ist der Streckenausschnitt erkennbar.')}
+      </ul>
     </div>`;
   if (!d.open) d.showModal();
 }
@@ -1088,13 +1333,18 @@ $('#dialog').addEventListener('click', async ev => {
   if ('pZu' in t.dataset) d.close();
   else if (t.dataset.pOeffnen) { store.oeffnen(t.dataset.pOeffnen); d.close(); }
   else if (t.dataset.pWeg) {
-    const name = store.liste().find(x => x.id === t.dataset.pWeg)?.name;
-    if (confirm(`Planung „${name}“ endgültig löschen?`)) { store.loeschen(t.dataset.pWeg); projektDialog(); }
+    const info = store.liste().find(x => x.id === t.dataset.pWeg);
+    if (confirm(`Planung „${info?.name || 'Ohne Namen'}“ löschen?\n\n${info?.punkte ?? 0} Kontrollpunkte, zuletzt geändert ${datumKurz(info?.geaendert)}.\n\nSie landet im Papierkorb (weiter unten in diesem Fenster) und lässt sich dort wiederherstellen.`)) {
+      store.loeschen(t.dataset.pWeg);
+      projektDialog();
+    }
   }
+  else if (t.dataset.pZurueck) { const p = store.wiederherstellen(t.dataset.pZurueck); d.close(); if (p) meldung(`Planung „${p.name}“ wiederhergestellt.`); }
+  else if (t.dataset.pWiderruf) { vergessen(t.dataset.pWiderruf); projektDialog(); }
   else if ('pNeu' in t.dataset) { store.neu('Neue Marschplanung'); d.close(); }
   else if ('pDup' in t.dataset) { store.duplizieren(); d.close(); }
   else if ('pBeispiel' in t.dataset) { store.neu('Beispiel'); store.aendern(p => { beispielFuellen(p, leseGpx); }); d.close(); }
-  else if ('pExport' in t.dataset) { download(`${pdfName(store.aktuell())}.marschplan.json`, store.alsJson(), 'application/json'); }
+  else if ('pExport' in t.dataset) { planungSichern(); projektDialog(); }
   else if ('pImport' in t.dataset) { $('#p-datei').click(); }
 });
 $('#dialog').addEventListener('change', async ev => {
@@ -1105,9 +1355,23 @@ $('#dialog').addEventListener('change', async ev => {
 
 /* ---------- Start ---------- */
 
+let angezeigtePlanung = store.aktuell().id;
 store.auf(art => {
-  if (art === 'wechsel') { render(); return; }
-  if (art === 'speicher') { speicherstandAktualisieren(); renderNav(); return; }
+  if (art === 'wechsel') {
+    if (store.aktuell().id !== angezeigtePlanung) { angezeigtePlanung = store.aktuell().id; fehlerPlaetze = ''; fehlerArten = ''; }
+    render();
+    return;
+  }
+  if (art === 'fremd') {
+    render();
+    meldung('Diese Planung wurde in einem anderen Fenster geändert – der neuere Stand ist übernommen.', 'fehler');
+    return;
+  }
+  if (art === 'speicher') {
+    speicherstandAktualisieren(); renderNav(); abgeleitetAktualisieren();
+    if (store.speicherProbleme()) meldung('⚠ Der Browser kann nicht mehr speichern. Bitte jetzt als Datei sichern, sonst gehen Änderungen verloren.', 'fehler', true, { text: 'Jetzt sichern', fn: planungSichern });
+    return;
+  }
   vorschauAktualisieren();
   abgeleitetAktualisieren();
   kopfAktualisieren();
@@ -1117,3 +1381,16 @@ store.auf(art => {
 
 if (matchMedia('(max-width: 1180px)').matches) document.body.classList.remove('vorschau-offen');
 render();
+
+// Der Browser soll den Speicher dieser Seite nicht ungefragt räumen (Platzmangel, Safari nach Inaktivität)
+try { navigator.storage?.persist?.()?.catch?.(() => {}); } catch { /* wird dann eben nicht zugesagt */ }
+
+{
+  const lp = store.ladeProbleme();
+  if (lp) {
+    meldung(lp.anzahl === null
+      ? 'Die gespeicherten Planungen waren nicht lesbar. Die Rohdaten sind gesichert und gehen nicht verloren.'
+      : `${lp.anzahl} gespeicherte Planung(en) waren nicht lesbar und fehlen hier. Die Rohdaten sind gesichert.`,
+    'fehler', true, { text: 'Rohdaten herunterladen', fn: () => download('marschplaner-rohdaten.json.txt', lp.text ?? '', 'text/plain') });
+  }
+}

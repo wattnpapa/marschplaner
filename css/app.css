@@ -160,6 +160,35 @@ body.zieht .ablage { border-color: var(--thw); background: var(--thw-blass); col
 .kp-marker.ziel { background: var(--text); border-color: #fff; color: #fff; }
 .kp-marker.th, .kp-marker.tank { border-color: var(--warnung); color: var(--warnung); }
 .kp-marker.rast { background: var(--warnung); border-color: #fff; color: #fff; }
+.kp-marker { position: relative; }
+/* Art des Punkts auch ohne Farbe: Kürzel oben rechts am Marker */
+.kp-marker[data-typ="rast"]::after, .kp-marker[data-typ="tank"]::after, .kp-marker[data-typ="th"]::after,
+.kp-marker[data-typ="ablauf"]::after, .kp-marker[data-typ="ziel"]::after {
+  position: absolute; top: -9px; right: -9px; min-width: 14px; height: 14px; padding: 0 2px; border-radius: 3px;
+  background: #000; color: #fff; font-size: 10px; line-height: 14px; text-align: center; font-weight: 800;
+}
+.kp-marker[data-typ="rast"]::after { content: 'R'; }
+.kp-marker[data-typ="tank"]::after { content: 'T'; }
+.kp-marker[data-typ="th"]::after { content: 'H'; }
+.kp-marker[data-typ="ablauf"]::after { content: '▶'; }
+.kp-marker[data-typ="ziel"]::after { content: '■'; }
+.kp-marker.ablauf { border-radius: 5px; }
+.platz-marker {
+  display: grid; place-items: center; width: 100%; height: 100%; border-radius: 4px; box-sizing: border-box;
+  background: #fff; border: 2px solid #1b2a41; color: #1b2a41; font-weight: 800; font-size: 11px; box-shadow: 0 1px 3px rgba(0,0,0,.35);
+}
+.platz-marker.rast { border-radius: 50%; }
+.platz-marker.tank { transform: rotate(45deg); }
+.platz-marker.tank { font-size: 0; }
+.platz-marker.tank::before { content: 'T'; font-size: 11px; transform: rotate(-45deg); }
+.platz-marker.gut { border-width: 3px; font-size: 13px; background: #ffe9a8; }
+.platz-marker.genommen { background: var(--gut-flaeche); border-style: dashed; color: var(--gut); }
+.platz-marker.tank.genommen::before { content: '✓'; }
+.karte-hinweis {
+  position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 600; max-width: calc(100% - 100px);
+  background: var(--warnung-flaeche); color: #5b3700; border: 1px solid #e6c893; border-radius: 7px; padding: 5px 10px; font-size: 12.5px; pointer-events: none;
+}
+.karte-hinweis[hidden] { display: none; }
 .popup-knopf { margin-top: 6px; }
 .legende-karte { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--schwach); margin: 8px 0 14px; }
 .legende-karte i { display: inline-block; width: 26px; height: 0; border-top: 4px solid; vertical-align: middle; margin-right: 6px; }
@@ -183,8 +212,11 @@ body.zieht .ablage { border-color: var(--thw); background: var(--thw-blass); col
 .meldungen li { padding: 8px 12px; border-radius: 7px; border: 1px solid; display: flex; gap: 10px; align-items: baseline; }
 .meldungen li.warnung { background: var(--warnung-flaeche); border-color: #e6c893; color: #5b3700; }
 .meldungen li.fehler { background: var(--gefahr-flaeche); border-color: #d9a3a3; color: #7a1818; }
+.meldungen li.hinweis { background: var(--flaeche-2); border-color: var(--linie); color: var(--schwach); }
 .meldungen li.ok { background: var(--gut-flaeche); border-color: #a7d4b2; color: #14532d; }
 .meldungen button { margin-left: auto; flex: none; }
+.vorgabe-hinweis.fehler { background: var(--gefahr-flaeche); border-color: #d9a3a3; color: #7a1818; }
+.vorgabe-hinweis .knopf { margin-left: 6px; }
 .vorgabe-hinweis { font-size: 12.5px; color: var(--warnung); background: var(--warnung-flaeche); border: 1px solid #e6c893; border-radius: 7px; padding: 8px 12px; margin-bottom: 14px; }
 
 /* ---- Hilfsmittel ---- */
@@ -226,6 +258,7 @@ body.zieht .ablage { border-color: var(--thw); background: var(--thw-blass); col
 .projektliste li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--linie); border-radius: 8px; }
 .projektliste li.aktiv { border-color: var(--thw); background: var(--thw-blass); }
 .projektliste .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.projektliste .abstand-links { margin-left: 14px; }
 .projektliste .meta { color: var(--schwach); font-size: 12px; }
 .toast {
   position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; z-index: 2000;
@@ -234,6 +267,12 @@ body.zieht .ablage { border-color: var(--thw); background: var(--thw-blass); col
 }
 .toast.sichtbar { opacity: 1; transform: translate(-50%, 0); }
 .toast.fehler { background: var(--gefahr); }
+.toast.mit-aktion { pointer-events: auto; }
+.toast-knopf {
+  margin-left: 8px; padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,.7); background: transparent; color: #fff;
+  font-weight: 700; cursor: pointer;
+}
+.toast-knopf:hover { background: rgba(255,255,255,.18); }
 
 /* ---- schmale Bildschirme ---- */
 @media (max-width: 1180px) {
@@ -254,3 +293,10 @@ body.zieht .ablage { border-color: var(--thw); background: var(--thw-blass); col
   #karte { height: 320px; }
 }
 @media print { #app { display: none; } }
+
+/* ---- Eingabe außerhalb des erlaubten Bereichs, Auftragsfelder von Hand, Sicherungsalter ---- */
+.feld input.ungueltig, .tab input.ungueltig { border-color: var(--gefahr); background: var(--gefahr-flaeche); }
+.auto-abweichung { display: block; font-size: 12px; color: var(--warnung); margin-top: 2px; }
+.auto-abweichung[hidden] { display: none; }
+.speicherstand.alt { color: #ffe08a; }
+.uebernommen { color: var(--gut); font-size: 12.5px; }

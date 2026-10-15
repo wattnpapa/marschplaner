@@ -177,7 +177,7 @@ export function neuesProjekt(name = 'Neue Marschplanung') {
     erstellt: jetzt,
     geaendert: jetzt,
     kopf: {
-      kennung: '', verband: '', datum: '', von: '', nach: '', ablaufzeit: '08:00'
+      kennung: '', verband: '', datum: '', von: '', nach: '', ablaufzeit: ''
     },
     parameter: {
       v:      { bab: 60, bul: 50, ort: 30 },        // Marschgeschwindigkeit km/h

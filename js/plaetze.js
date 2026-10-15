@@ -7,7 +7,7 @@
 // abseits der Strecke, kostet das einen Umweg, den der Fahrplan mitrechnet.
 
 import { naechsterKm, trackLaengeM, teilTrack } from './geo.js';
-import { polylinie, ladeElemente } from './strassenart.js';
+import { polylinie, ladeElemente, abbruchFehler, schlafen } from './strassenart.js';
 import { fahrplan } from './rechnen.js';
 
 export const STUECK_KM = 10;
@@ -91,13 +91,14 @@ export function passtZu(plaetze, laengeKm, radiusM) {
  * passenden Standes (`vorhanden`) werden nicht noch einmal abgefragt.
  */
 export async function sucheEntlang(track, radiusM, opt = {}) {
-  const { fortschritt = () => {}, vorhanden = null, beiStueck = () => {}, versuche, tempo = 1 } = opt;
+  const { fortschritt = () => {}, vorhanden = null, beiStueck = () => {}, versuche, tempo = 1, signal = null } = opt;
   const laenge = trackLaengeM(track) / 1000;
   const stand = passtZu(vorhanden, laenge, radiusM) ? structuredClone(vorhanden) : leerePlaetze(laenge, radiusM);
   const stuecke = stand.fertig.length;
   let hinweis = '', letzterFehler = null, geholt = 0;
   for (let s = 0; s < stuecke; s++) {
     if (stand.fertig[s]) continue;
+    if (signal?.aborted) throw abbruchFehler();
     fortschritt(s, stuecke, hinweis);
     hinweis = '';
     const von = s * STUECK_KM, bis = Math.min(laenge, (s + 1) * STUECK_KM);
@@ -105,7 +106,7 @@ export async function sucheEntlang(track, radiusM, opt = {}) {
     if (sub.length < 2) { stand.fertig[s] = true; continue; }
     try {
       const el = await ladeElemente(abfrage(sub, radiusM),
-        (sek, grund) => fortschritt(s, stuecke, `${grund} – neuer Versuch in ${sek} s`), { versuche, tempo });
+        (sek, grund) => fortschritt(s, stuecke, `${grund} – neuer Versuch in ${sek} s`), { versuche, tempo, signal });
       const bekannt = new Set(stand.liste.map(x => x.id));
       for (const platz of normalisiere(el, track, radiusM)) {
         if (!bekannt.has(platz.id)) { stand.liste.push(platz); bekannt.add(platz.id); }
@@ -116,10 +117,11 @@ export async function sucheEntlang(track, radiusM, opt = {}) {
       geholt++;
       beiStueck(stand);
     } catch (err) {
+      if (err.name === 'Abbruch') throw err;             // Nutzer bricht ab oder Planung gewechselt: nicht weiterfragen
       letzterFehler = err;
       stand.luecken = offeneStuecke(stand);
     }
-    if (s < stuecke - 1) await new Promise(r => setTimeout(r, PAUSE_MS * tempo));
+    if (s < stuecke - 1) await schlafen(PAUSE_MS * tempo, signal);
   }
   fortschritt(stuecke, stuecke);
   stand.luecken = offeneStuecke(stand);
@@ -155,6 +157,24 @@ export function kmBeiZeit(fp, t) {
     }
   }
   return z[z.length - 1].kp.km;
+}
+
+/**
+ * Uhrzeit (Minuten seit Mitternacht), zu der die Spitze der Kolonne bei `km` ist –
+ * mit allen Halten und Umwegen davor. Zwischen zwei Punkten linear nach Strecke.
+ */
+export function uhrBeiKm(fp, km) {
+  const z = fp.zeilen;
+  if (!z.length) return fp.start;
+  if (km <= z[0].kp.km) return z[0].an;
+  for (let i = 1; i < z.length; i++) {
+    if (km <= z[i].kp.km) {
+      const l = z[i].kp.km - z[i - 1].kp.km;
+      const f = l > 0 ? (km - z[i - 1].kp.km) / l : 1;
+      return Math.round(z[i - 1].ab + f * (z[i].an - z[i - 1].ab));
+    }
+  }
+  return z[z.length - 1].an;
 }
 
 const ART_PUNKTE = { rast: 3, tank: 1.5, parkplatz: 1 };

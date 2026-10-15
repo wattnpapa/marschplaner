@@ -5,13 +5,14 @@
 // Punkt fällt, entscheidet der Aufrufer (er rechnet den Kilometerstand aus).
 // Neu gezeichnet wird nur, wenn sich etwas Sichtbares geändert hat.
 
-import { teilTrack, naechsterKm, punktBeiKm } from './geo.js';
+import { teilTrack, naechsterKm, punktBeiKm, koordText } from './geo.js';
 import { sortierteKp, KLASSE_KURZ, TYP_NAME, zahl } from './rechnen.js';
 import { ART_NAME, umwegKm } from './plaetze.js';
 import { klassenLaeufe } from './strassenart.js';
 
 export const STRASSENFARBE = { bab: '#c62828', bul: '#003399', ort: '#1b7a3d' };
-const PLATZFARBE = { rast: '#0b7a4b', parkplatz: '#5c6879', tank: '#b26a00' };
+/** Kennbuchstabe je Platzart: die Karte muss auch ohne Farbe lesbar sein (Rot-Grün-Schwäche, S/W-Screenshot) */
+const PLATZ_KUERZEL = { rast: 'R', parkplatz: 'P', tank: 'T' };
 
 const KACHELN = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
@@ -25,14 +26,25 @@ export function karteErzeugen(host, rueck) {
 
   const karte = L.map(host, { zoomControl: true, worldCopyJump: false });
   karte.setView([51.16, 10.45], 6);
-  L.tileLayer(KACHELN, {
+  const kacheln = L.tileLayer(KACHELN, {
     maxZoom: 19,
     attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende'
   }).addTo(karte);
   const ebene = L.layerGroup().addTo(karte);
+  L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(karte);
+
+  // Fehlen Kacheln (kein Netz), bleibt die Strecke lesbar – das soll man auch erfahren
+  const offline = document.createElement('div');
+  offline.className = 'karte-hinweis';
+  offline.hidden = true;
+  offline.textContent = 'Kartenkacheln nicht geladen (kein Netz?) – Strecke und Punkte sind vollständig.';
+  host.append(offline);
+  kacheln.on('tileerror', () => { offline.hidden = false; });
+  kacheln.on('tileload', () => { offline.hidden = true; });
 
   let plaetze = [];                // gefundene Rast-/Park-/Tankplätze
   let beste = new Set();           // ids der vorgeschlagenen Plätze
+  let uebernommen = new Map();     // Platz-id → Nummer des Kontrollpunkts, der daraus wurde
   let weg = false;                 // nach entfernen() ignorieren verspätete Aufrufe
   let letzteSignatur = '';
   let letzterTrack = '';
@@ -63,6 +75,11 @@ export function karteErzeugen(host, rueck) {
     const u = umwegKm(pl.abstandM);
     if (u) teile.push(`Umweg ca. ${zahl(u, 1)} km`);
     box.append(z(teile.join(' · ')));
+    box.append(z(koordText(pl.lat, pl.lon) + ' (WGS 84)'));
+    if (uebernommen.has(pl.id)) {
+      box.append(z(`✓ Bereits als Punkt ${uebernommen.get(pl.id)} übernommen`, true));
+      return box;
+    }
     const leiste = document.createElement('div');
     leiste.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;margin-top:6px';
     for (const [typ, text] of [['rast', 'Rast'], ['th', 'Techn. Halt'], ['tank', 'Tanken']]) {
@@ -81,7 +98,7 @@ export function karteErzeugen(host, rueck) {
     const kps = sortierteKp(p.route);
     const sig = JSON.stringify([
       track.length, track[0], track[track.length - 1],
-      kps.map(k => [k.id, k.km, k.typ, k.klasse, k.ort, k.strasse, k.abseits?.lat]), plaetze.length, [...beste].join(','), p.route.arten ? p.route.arten.k.length : 0
+      kps.map(k => [k.id, k.km, k.typ, k.klasse, k.ort, k.strasse, k.abseits?.lat]), plaetze.length, [...beste].join(','), [...uebernommen.keys()].join(','), p.route.arten ? p.route.arten.k.length : 0
     ]);
     const trackSig = JSON.stringify([track.length, track[0], track[track.length - 1]]);
     if (sig === letzteSignatur && !einpassen) return;
@@ -110,14 +127,18 @@ export function karteErzeugen(host, rueck) {
       }
     }
 
-    // gefundene Plätze
+    // gefundene Plätze: Buchstabe statt nur Farbe (R Rast, P Parkplatz, T Tankstelle)
     for (const pl of plaetze) {
       const gut = beste.has(pl.id);
-      const m = L.circleMarker([pl.lat, pl.lon], {
-        radius: gut ? 9 : 5, weight: gut ? 3 : 1.5, color: gut ? '#000' : '#fff',
-        fillColor: PLATZFARBE[pl.art] || '#5c6879', fillOpacity: 0.95
-      }).addTo(ebene);
-      m.bindTooltip(`${pl.name || ART_NAME[pl.art]}${gut ? ' – Vorschlag' : ''}`);
+      const genommen = uebernommen.has(pl.id);
+      const g = gut ? 26 : 20;
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="platz-marker ${pl.art}${gut ? ' gut' : ''}${genommen ? ' genommen' : ''}">${genommen ? '✓' : PLATZ_KUERZEL[pl.art] || '?'}</div>`,
+        iconSize: [g, g], iconAnchor: [g / 2, g / 2]
+      });
+      const m = L.marker([pl.lat, pl.lon], { icon, keyboard: false, zIndexOffset: gut ? 500 : 0 }).addTo(ebene);
+      m.bindTooltip(`${pl.name || ART_NAME[pl.art]}${gut ? ' – Vorschlag' : ''}${genommen ? ' – übernommen' : ''}`);
       m.bindPopup(() => platzPopup(pl));
     }
 
@@ -133,11 +154,11 @@ export function karteErzeugen(host, rueck) {
       if (!lage) return;
       const icon = L.divIcon({
         className: '',
-        html: `<div class="kp-marker ${kp.typ}">${i + 1}</div>`,
+        html: `<div class="kp-marker ${kp.typ}" data-typ="${kp.typ}">${i + 1}</div>`,
         iconSize: [26, 26], iconAnchor: [13, 13]
       });
       const m = L.marker(lage, { icon, draggable: true, keyboard: false, zIndexOffset: 1000 }).addTo(ebene);
-      m.bindTooltip(`${i + 1} · ${kp.ort || TYP_NAME[kp.typ]}`, { direction: 'top', offset: [0, -12] });
+      m.bindTooltip(`${i + 1} · ${kp.ort || TYP_NAME[kp.typ]}${kp.typ !== 'kp' && kp.ort ? ' (' + TYP_NAME[kp.typ] + ')' : ''}<br><small>km ${zahl(kp.km, 1)} · ca. ${koordText(lage[0], lage[1])}</small>`, { direction: 'top', offset: [0, -12] });
       m.on('dragend', () => {
         const ll = m.getLatLng();
         rueck.beiKpVerschoben(kp.id, [ll.lat, ll.lng]);
@@ -152,9 +173,11 @@ export function karteErzeugen(host, rueck) {
 
   return {
     aktualisieren,
-    setzePlaetze(liste, ids) { plaetze = liste || []; beste = new Set(ids || []); letzteSignatur = ''; },
+    setzePlaetze(liste, ids, genommen) { plaetze = liste || []; beste = new Set(ids || []); uebernommen = genommen instanceof Map ? genommen : new Map(); letzteSignatur = ''; },
+    /** Zeichnet alles neu, auch wenn sich nichts geändert hat (z. B. ein abgebrochenes Verschieben zurücksetzen) */
+    neuZeichnen(p) { letzteSignatur = ''; aktualisieren(p); },
     groesseNeu() { if (!weg) karte.invalidateSize(); },
     einpassen(p) { aktualisieren(p, { einpassen: true }); },
-    entfernen() { weg = true; karte.remove(); }
+    entfernen() { weg = true; try { karte.stop(); } catch { /* keine laufende Animation */ } karte.remove(); }
   };
 }
