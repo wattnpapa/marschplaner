@@ -52,7 +52,7 @@ Kein Build-Schritt, keine Abhängigkeiten, kein Paketmanager (siehe `CLAUDE.md`)
 
 ```bash
 python3 -m http.server 8765      # dann http://localhost:8765
-node --test tests/               # Rechenkern, GPX, Blätter
+node --test "tests/*.test.mjs"              # Rechenkern, GPX, Blätter
 ```
 
 Veröffentlicht wird über GitHub Actions (`.github/workflows/pages.yml`): Bei jedem Push auf

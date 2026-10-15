@@ -22,7 +22,7 @@ sonst greifen Speichern, Rückgängig und Neuzeichnen nicht. Wird das Schema erw
 `localStorage` der Nutzer liegen echte Planungen.
 
 **Rechnen ohne Oberfläche.** `js/rechnen.js`, `geo.js`, `gpx.js`, `route.js`, `strassenart.js` kennen kein DOM
-und werden mit `node --test tests/` geprüft. Neue Formeln gehören dorthin und bekommen
+und werden mit `node --test "tests/*.test.mjs"` geprüft. Neue Formeln gehören dorthin und bekommen
 einen Test. `blaetter.js` erzeugt reines HTML (Projekt rein, String raus) für Vorschau
 *und* Druck; `css/blatt.css` gibt den Blättern ihr Aussehen, `css/print.css` Seitenformat
 und Umbrüche.
@@ -45,6 +45,6 @@ Leerzeichen vor Einheiten wo es auf dem Blatt zählt.
 ## Prüfen
 
 ```bash
-node --test tests/                 # muss grün sein
+node --test "tests/*.test.mjs"                # muss grün sein
 python3 -m http.server 8765        # im Browser: Beispiel laden, alle Blätter durchsehen, Druckvorschau
 ```
